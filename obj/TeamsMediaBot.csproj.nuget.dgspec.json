@@ -78,8 +78,7 @@
             },
             "Microsoft.Skype.Bots.Media": {
               "target": "Package",
-              "version": "[1.31.0.225-preview, )",
-              "generatePathProperty": true
+              "version": "[1.31.0.225-preview, )"
             }
           },
           "imports": [
