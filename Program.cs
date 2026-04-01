@@ -29,7 +29,12 @@ public static class Program
             ClientSecret = GetConfig(builder.Configuration, "BOT_CLIENT_SECRET", "AzureAd:ClientSecret"),
             ApplicationName = Environment.GetEnvironmentVariable("BOT_APP_NAME") ?? "TeamsMediaBot",
             ServiceBaseUrl = GetConfig(builder.Configuration, "BOT_SERVICE_BASE_URL", "Bot:CallbackUrl"),
-            AwsRegion = GetConfig(builder.Configuration, "AWS_REGION", "AWS:Region")
+            AwsRegion = GetConfig(builder.Configuration, "AWS_REGION", "AWS:Region"),
+            MediaCertificateThumbprint = GetConfig(builder.Configuration, "BOT_MEDIA_CERT_THUMBPRINT", "Media:CertificateThumbprint"),
+            MediaPublicIp = GetConfig(builder.Configuration, "BOT_MEDIA_PUBLIC_IP", "Media:PublicIp"),
+            MediaInstanceInternalPort = ReadInt(builder.Configuration, "BOT_MEDIA_INSTANCE_INTERNAL_PORT", "Media:InstanceInternalPort", 8445),
+            MediaInstancePublicPort = ReadInt(builder.Configuration, "BOT_MEDIA_INSTANCE_PUBLIC_PORT", "Media:InstancePublicPort", 8445),
+            MediaServiceFqdn = ReadOptional(builder.Configuration, "BOT_MEDIA_SERVICE_FQDN", "Media:ServiceFqdn")
         });
 
         builder.Services.AddSingleton<TranscriptBroadcaster>();
@@ -66,7 +71,13 @@ public static class Program
             {
                 log.LogError(ex, "Join meeting failed.");
                 return Results.Json(
-                    new { message = "Join meeting failed.", error = ex.Message },
+                    new
+                    {
+                        message = "Join meeting failed.",
+                        error = ex.Message,
+                        inner = ex.InnerException?.Message,
+                        type = ex.GetType().FullName
+                    },
                     statusCode: StatusCodes.Status500InternalServerError);
             }
         });
@@ -89,5 +100,34 @@ public static class Program
         }
 
         throw new InvalidOperationException($"Missing configuration: {envKey} or {configKey}");
+    }
+
+    private static string? ReadOptional(IConfiguration configuration, string envKey, string configKey)
+    {
+        var env = Environment.GetEnvironmentVariable(envKey);
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            return env.Trim();
+        }
+
+        var fromConfig = configuration[configKey];
+        return string.IsNullOrWhiteSpace(fromConfig) ? null : fromConfig.Trim();
+    }
+
+    private static int ReadInt(IConfiguration configuration, string envKey, string configKey, int defaultValue)
+    {
+        var env = Environment.GetEnvironmentVariable(envKey);
+        if (!string.IsNullOrWhiteSpace(env) && int.TryParse(env.Trim(), out var fromEnv))
+        {
+            return fromEnv;
+        }
+
+        var fromConfig = configuration[configKey];
+        if (!string.IsNullOrWhiteSpace(fromConfig) && int.TryParse(fromConfig.Trim(), out var fromFile))
+        {
+            return fromFile;
+        }
+
+        return defaultValue;
     }
 }

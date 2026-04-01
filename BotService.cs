@@ -2,9 +2,12 @@ using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Communications.Calls;
+using Microsoft.Graph.Communications.Calls.Media;
 using Microsoft.Graph.Communications.Client;
 using Microsoft.Graph.Communications.Client.Authentication;
 using Microsoft.Graph.Communications.Common.Telemetry;
+using Microsoft.Skype.Bots.Media;
+using System.Net;
 using System.Net.Http.Headers;
 
 namespace TeamsMediaBot;
@@ -17,6 +20,18 @@ public sealed class BotSettings
     public required string ApplicationName { get; init; }
     public required string ServiceBaseUrl { get; init; }
     public required string AwsRegion { get; init; }
+
+    /// <summary>Thumbprint of a TLS cert in Windows cert store (LocalMachine\My) used for Teams media mTLS.</summary>
+    public required string MediaCertificateThumbprint { get; init; }
+
+    /// <summary>VM public IPv4 address reachable by Microsoft Teams media edge.</summary>
+    public required string MediaPublicIp { get; init; }
+
+    public int MediaInstanceInternalPort { get; init; } = 8445;
+    public int MediaInstancePublicPort { get; init; } = 8445;
+
+    /// <summary>Optional; defaults to host from Bot callback URL.</summary>
+    public string? MediaServiceFqdn { get; init; }
 }
 
 public sealed class BotService
@@ -94,6 +109,29 @@ public sealed class BotService
         var authority = notificationUri.GetLeftPart(UriPartial.Authority);
         var serviceBaseUri = new Uri(authority + "/", UriKind.Absolute);
 
+        var fqdn = string.IsNullOrWhiteSpace(_settings.MediaServiceFqdn)
+            ? notificationUri.Host
+            : _settings.MediaServiceFqdn.Trim();
+
+        if (!IPAddress.TryParse(_settings.MediaPublicIp.Trim(), out var publicIp))
+        {
+            throw new InvalidOperationException(
+                "Media:PublicIp / BOT_MEDIA_PUBLIC_IP must be the VM public IPv4 address (e.g. 203.0.113.10).");
+        }
+
+        var mediaPlatformSettings = new MediaPlatformSettings
+        {
+            ApplicationId = _settings.ClientId,
+            MediaPlatformInstanceSettings = new MediaPlatformInstanceSettings
+            {
+                CertificateThumbprint = _settings.MediaCertificateThumbprint.Trim(),
+                InstanceInternalPort = _settings.MediaInstanceInternalPort,
+                InstancePublicPort = _settings.MediaInstancePublicPort,
+                InstancePublicIPAddress = publicIp,
+                ServiceFqdn = fqdn
+            }
+        };
+
         return new CommunicationsClientBuilder(
                 _settings.ClientId,
                 _settings.ApplicationName,
@@ -101,6 +139,7 @@ public sealed class BotService
             .SetAuthenticationProvider(authProvider)
             .SetServiceBaseUrl(serviceBaseUri)
             .SetNotificationUrl(notificationUri)
+            .SetMediaPlatformSettings(mediaPlatformSettings)
             .Build();
     }
 }
