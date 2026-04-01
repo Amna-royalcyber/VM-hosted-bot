@@ -76,12 +76,31 @@ public sealed class BotService
         var credential = new ClientSecretCredential(_settings.TenantId, _settings.ClientId, _settings.ClientSecret);
         var authProvider = new ClientCredentialsAuthenticationProvider(credential, _settings.TenantId);
 
+        // SDK requires BOTH: service base (origin) and notification (callback) URLs.
+        // Bot:CallbackUrl / BOT_SERVICE_BASE_URL should be the full HTTPS callback, e.g. https://host/callback
+        var notificationUrl = _settings.ServiceBaseUrl.Trim();
+        if (string.IsNullOrWhiteSpace(notificationUrl))
+        {
+            throw new InvalidOperationException(
+                "Callback URL is empty. Set Bot:CallbackUrl or BOT_SERVICE_BASE_URL to your public HTTPS callback (e.g. https://bot.example.com/callback).");
+        }
+
+        var notificationUri = new Uri(notificationUrl, UriKind.Absolute);
+        if (notificationUri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException("Callback URL must use HTTPS.");
+        }
+
+        var authority = notificationUri.GetLeftPart(UriPartial.Authority);
+        var serviceBaseUri = new Uri(authority + "/", UriKind.Absolute);
+
         return new CommunicationsClientBuilder(
                 _settings.ClientId,
                 _settings.ApplicationName,
                 _graphLogger)
             .SetAuthenticationProvider(authProvider)
-            .SetNotificationUrl(new Uri(_settings.ServiceBaseUrl))
+            .SetServiceBaseUrl(serviceBaseUri)
+            .SetNotificationUrl(notificationUri)
             .Build();
     }
 }
