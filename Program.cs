@@ -52,7 +52,18 @@ public static class Program
 
     private static string GetConfig(IConfiguration configuration, string envKey, string configKey)
     {
-        var value = Environment.GetEnvironmentVariable(envKey) ?? configuration[configKey];
-        return value ?? throw new InvalidOperationException($"Missing configuration: {envKey} or {configKey}");
+        var env = Environment.GetEnvironmentVariable(envKey);
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            return env.Trim();
+        }
+
+        var fromConfig = configuration[configKey];
+        if (!string.IsNullOrWhiteSpace(fromConfig))
+        {
+            return fromConfig.Trim();
+        }
+
+        throw new InvalidOperationException($"Missing configuration: {envKey} or {configKey}");
     }
 }
