@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -12,6 +13,13 @@ public static class Program
 
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
+
+        builder.Services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            options.KnownNetworks.Clear();
+            options.KnownProxies.Clear();
+        });
 
         builder.Services.AddSignalR();
         builder.Services.AddSingleton(new BotSettings
@@ -32,6 +40,10 @@ public static class Program
         builder.Services.AddSingleton<BotService>();
 
         var app = builder.Build();
+
+        // Must run first so SignalR and HTTPS URLs see correct scheme/host behind nginx.
+        app.UseForwardedHeaders();
+
         app.UseDefaultFiles();
         app.UseStaticFiles();
 
