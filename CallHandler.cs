@@ -166,7 +166,8 @@ public sealed class CallHandler
     }
 
     /// <summary>
-    /// Unwraps Teams launcher URLs so the path contains /meetup-join/...
+    /// Unwraps Outlook Safe Links (<c>*.safelinks.protection.outlook.com?url=...</c>) and Teams
+    /// <c>launcher.html?url=...</c> so we get a direct <c>teams.microsoft.com/.../meetup-join/...</c> URL with <c>context=</c>.
     /// </summary>
     private static string NormalizeTeamsJoinUrl(string joinUrl, ILogger logger)
     {
@@ -181,25 +182,28 @@ public sealed class CallHandler
         }
 
         var current = joinUrl;
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 5; i++)
         {
             if (!Uri.TryCreate(current, UriKind.Absolute, out uri))
             {
                 break;
             }
 
-            if (!uri.AbsolutePath.Contains("launcher", StringComparison.OrdinalIgnoreCase))
+            var innerEncoded = GetQueryParameter(uri.Query, "url");
+            if (string.IsNullOrEmpty(innerEncoded))
             {
                 break;
             }
 
-            var inner = GetQueryParameter(uri.Query, "url");
-            if (string.IsNullOrEmpty(inner))
+            var isWrapper =
+                uri.Host.Contains("safelinks", StringComparison.OrdinalIgnoreCase) ||
+                uri.AbsolutePath.Contains("launcher", StringComparison.OrdinalIgnoreCase);
+            if (!isWrapper)
             {
                 break;
             }
 
-            inner = Uri.UnescapeDataString(inner);
+            var inner = Uri.UnescapeDataString(innerEncoded);
             if (inner.StartsWith('/'))
             {
                 current = $"{uri.Scheme}://{uri.Host}{inner}";
@@ -214,7 +218,7 @@ public sealed class CallHandler
                 current = $"{uri.Scheme}://{uri.Host}/{inner.TrimStart('/')}";
             }
 
-            logger.LogInformation("Unwrapped Teams launcher URL to meeting path.");
+            logger.LogInformation("Unwrapped wrapper URL (Outlook Safe Links or Teams launcher) to Teams meeting link.");
         }
 
         return current;
