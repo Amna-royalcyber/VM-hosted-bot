@@ -82,12 +82,13 @@ public sealed class CallHandler
         var normalized = NormalizeTeamsJoinUrl(joinUrl.Trim(), logger);
         var uri = new Uri(normalized);
 
-        if (!TryExtractMeetupJoinThreadAndMessage(uri, out var threadId, out var messageId))
+        if (!TryExtractTeamsThreadAndMessage(uri, out var threadId, out var messageId))
         {
             throw new ArgumentException(
-                "Could not parse this Teams link. Copy the full join link from the meeting invite (Open in Teams → Copy join link). " +
-                "It must contain meetup-join and look like: https://teams.microsoft.com/l/meetup-join/19%3A.../0?... " +
-                "Launcher links (launcher.html?url=...) are supported after normalization.",
+                "Could not parse this Teams link. Use one of: " +
+                "(1) Meet now / calendar join: …/l/meetup-join/19%3A…/0?… " +
+                "(2) Meeting chat link: …/l/chat/19:meeting_…@thread.v2/conversations?… " +
+                "Launcher links (launcher.html?url=…) are unwrapped automatically.",
                 nameof(joinUrl));
         }
 
@@ -198,16 +199,29 @@ public sealed class CallHandler
         return null;
     }
 
-    private static bool TryExtractMeetupJoinThreadAndMessage(Uri uri, out string threadId, out string messageId)
+    /// <summary>
+    /// Supports meetup-join links and meeting chat links (/l/chat/…/conversations).
+    /// </summary>
+    private static bool TryExtractTeamsThreadAndMessage(Uri uri, out string threadId, out string messageId)
     {
         threadId = null!;
         messageId = null!;
 
-        var match = MeetupJoinRegex.Match(uri.AbsolutePath);
-        if (match.Success)
+        // Standard join: …/meetup-join/{thread}/{messageId}/…
+        var meetupMatch = MeetupJoinRegex.Match(uri.AbsolutePath);
+        if (meetupMatch.Success)
         {
-            threadId = Uri.UnescapeDataString(match.Groups[1].Value);
-            messageId = Uri.UnescapeDataString(match.Groups[2].Value);
+            threadId = Uri.UnescapeDataString(meetupMatch.Groups[1].Value);
+            messageId = Uri.UnescapeDataString(meetupMatch.Groups[2].Value);
+            return true;
+        }
+
+        // Meeting chat thread: …/l/chat/19:meeting_…@thread.v2/conversations — use message "0" for join.
+        var chatMatch = ChatMeetingRegex.Match(uri.AbsolutePath);
+        if (chatMatch.Success)
+        {
+            threadId = Uri.UnescapeDataString(chatMatch.Groups[1].Value);
+            messageId = "0";
             return true;
         }
 
@@ -216,17 +230,32 @@ public sealed class CallHandler
             segments,
             s => s.Equals("meetup-join", StringComparison.OrdinalIgnoreCase));
 
-        if (meetupIdx < 0 || meetupIdx + 2 >= segments.Length)
+        if (meetupIdx >= 0 && meetupIdx + 2 < segments.Length)
         {
-            return false;
+            threadId = Uri.UnescapeDataString(segments[meetupIdx + 1]);
+            messageId = Uri.UnescapeDataString(segments[meetupIdx + 2]);
+            return true;
         }
 
-        threadId = Uri.UnescapeDataString(segments[meetupIdx + 1]);
-        messageId = Uri.UnescapeDataString(segments[meetupIdx + 2]);
-        return true;
+        var chatIdx = Array.FindIndex(
+            segments,
+            s => s.Equals("chat", StringComparison.OrdinalIgnoreCase));
+        if (chatIdx >= 0 && chatIdx + 2 < segments.Length &&
+            segments[chatIdx + 2].Equals("conversations", StringComparison.OrdinalIgnoreCase))
+        {
+            threadId = Uri.UnescapeDataString(segments[chatIdx + 1]);
+            messageId = "0";
+            return true;
+        }
+
+        return false;
     }
 
     private static readonly Regex MeetupJoinRegex = new(
         @"meetup-join/([^/?#]+)/([^/?#]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex ChatMeetingRegex = new(
+        @"chat/([^/]+)/conversations",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 }
