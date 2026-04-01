@@ -67,13 +67,38 @@ public sealed class CallHandler
         }
     }
 
+    /// <summary>
+    /// Parses a Teams meeting join URL (meetup-join) into ChatInfo / MeetingInfo.
+    /// ThreadId must be the thread segment (e.g. 19:meeting_...@thread.v2), not the full URL — otherwise Graph returns 404 NotFound.
+    /// </summary>
     private static (ChatInfo ChatInfo, MeetingInfo MeetingInfo) CreateJoinInfoFromUrl(string joinUrl)
     {
-        var encoded = Uri.EscapeDataString(joinUrl);
+        if (string.IsNullOrWhiteSpace(joinUrl))
+        {
+            throw new ArgumentException("Join URL is empty.", nameof(joinUrl));
+        }
+
+        var uri = new Uri(joinUrl.Trim());
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        var meetupIdx = Array.FindIndex(
+            segments,
+            s => s.Equals("meetup-join", StringComparison.OrdinalIgnoreCase));
+
+        if (meetupIdx < 0 || meetupIdx + 2 >= segments.Length)
+        {
+            throw new ArgumentException(
+                "Invalid Teams join URL. Use a full meeting link like https://teams.microsoft.com/l/meetup-join/19%3A.../0?...",
+                nameof(joinUrl));
+        }
+
+        var threadId = Uri.UnescapeDataString(segments[meetupIdx + 1]);
+        var messageId = Uri.UnescapeDataString(segments[meetupIdx + 2]);
+
         var chatInfo = new ChatInfo
         {
-            ThreadId = encoded,
-            MessageId = "0"
+            ThreadId = threadId,
+            MessageId = messageId
         };
 
         var meetingInfo = new OrganizerMeetingInfo

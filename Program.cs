@@ -67,6 +67,11 @@ public static class Program
                 await botService.JoinMeetingAsync(request.MeetingJoinUrl);
                 return Results.Ok(new { message = "Join request submitted." });
             }
+            catch (ArgumentException ex)
+            {
+                log.LogWarning(ex, "Invalid join URL.");
+                return Results.BadRequest(new { message = ex.Message });
+            }
             catch (Exception ex)
             {
                 log.LogError(ex, "Join meeting failed.");
