@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Communications.Calls;
@@ -98,13 +99,26 @@ public sealed class CallHandler
             MessageId = messageId
         };
 
+        // Graph requires the real meeting organizer Entra object id — not an empty GUID.
+        // It is in the meetup-join URL as ?context=… JSON field "Oid". Chat-only links often omit it → 404 NotFound.
+        var organizerObjectId = TryGetOrganizerObjectIdFromTeamsUrl(uri);
+        if (string.IsNullOrWhiteSpace(organizerObjectId))
+        {
+            throw new ArgumentException(
+                "This link does not include the meeting organizer id (Oid). " +
+                "Use the calendar join link: open the meeting in Outlook or Teams → \"Copy join link\" → paste the full URL " +
+                "(it must be a …/meetup-join/… URL whose query string contains context=… with Oid). " +
+                "Meeting chat links (…/l/chat/…/conversations) usually cannot be used to join via the Calling API.",
+                nameof(joinUrl));
+        }
+
         var meetingInfo = new OrganizerMeetingInfo
         {
             Organizer = new IdentitySet
             {
                 User = new Identity
                 {
-                    Id = "00000000-0000-0000-0000-000000000000"
+                    Id = organizerObjectId
                 }
             }
         };
@@ -115,6 +129,40 @@ public sealed class CallHandler
         };
 
         return (chatInfo, meetingInfo);
+    }
+
+    /// <summary>
+    /// Teams encodes join context in the <c>context</c> query parameter (JSON with Tid, Oid, etc.).
+    /// </summary>
+    private static string? TryGetOrganizerObjectIdFromTeamsUrl(Uri uri)
+    {
+        var raw = GetQueryParameter(uri.Query, "context");
+        if (string.IsNullOrEmpty(raw))
+        {
+            return null;
+        }
+
+        var decoded = Uri.UnescapeDataString(raw);
+        try
+        {
+            using var doc = JsonDocument.Parse(decoded);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("Oid", out var oid) && oid.ValueKind == JsonValueKind.String)
+            {
+                return oid.GetString();
+            }
+
+            if (root.TryGetProperty("oid", out var oidLower) && oidLower.ValueKind == JsonValueKind.String)
+            {
+                return oidLower.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
     }
 
     /// <summary>
