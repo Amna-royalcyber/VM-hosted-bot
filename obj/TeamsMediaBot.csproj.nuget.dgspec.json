@@ -75,6 +75,11 @@
             "Microsoft.Graph.Communications.Client": {
               "target": "Package",
               "version": "[1.2.0.15690, )"
+            },
+            "Microsoft.Skype.Bots.Media": {
+              "target": "Package",
+              "version": "[1.31.0.225-preview, )",
+              "generatePathProperty": true
             }
           },
           "imports": [

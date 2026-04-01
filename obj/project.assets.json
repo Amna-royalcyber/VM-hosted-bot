@@ -1349,7 +1349,7 @@
           "Microsoft.AspNetCore.App"
         ],
         "build": {
-          "build/net8.0/_._": {}
+          "build/net8.0/Microsoft.Skype.Bots.Media.targets": {}
         }
       },
       "Newtonsoft.Json/13.0.3": {
@@ -7959,7 +7959,8 @@
       "Microsoft.Extensions.Logging.Console >= 10.0.5",
       "Microsoft.Graph.Communications.Calls >= 1.2.0.15690",
       "Microsoft.Graph.Communications.Calls.Media >= 1.2.0.15690",
-      "Microsoft.Graph.Communications.Client >= 1.2.0.15690"
+      "Microsoft.Graph.Communications.Client >= 1.2.0.15690",
+      "Microsoft.Skype.Bots.Media >= 1.31.0.225-preview"
     ]
   },
   "packageFolders": {
@@ -8036,6 +8037,11 @@
           "Microsoft.Graph.Communications.Client": {
             "target": "Package",
             "version": "[1.2.0.15690, )"
+          },
+          "Microsoft.Skype.Bots.Media": {
+            "target": "Package",
+            "version": "[1.31.0.225-preview, )",
+            "generatePathProperty": true
           }
         },
         "imports": [
