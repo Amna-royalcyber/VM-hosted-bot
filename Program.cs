@@ -48,15 +48,27 @@ public static class Program
         app.UseStaticFiles();
 
         app.MapHub<TranscriptHub>("/hubs/transcripts");
-        app.MapPost("/api/bot/join", async (JoinMeetingRequest request, BotService botService) =>
+        app.MapPost("/api/bot/join", async (JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
         {
+            var log = loggerFactory.CreateLogger("TeamsMediaBot.Join");
+
             if (string.IsNullOrWhiteSpace(request.MeetingJoinUrl))
             {
                 return Results.BadRequest(new { message = "MeetingJoinUrl is required." });
             }
 
-            await botService.JoinMeetingAsync(request.MeetingJoinUrl);
-            return Results.Ok(new { message = "Join request submitted." });
+            try
+            {
+                await botService.JoinMeetingAsync(request.MeetingJoinUrl);
+                return Results.Ok(new { message = "Join request submitted." });
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Join meeting failed.");
+                return Results.Json(
+                    new { message = "Join meeting failed.", error = ex.Message },
+                    statusCode: StatusCodes.Status500InternalServerError);
+            }
         });
 
         await app.RunAsync();
