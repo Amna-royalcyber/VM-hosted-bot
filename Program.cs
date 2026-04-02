@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using System.Text;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -53,6 +54,29 @@ public static class Program
         app.UseStaticFiles();
 
         app.MapHub<TranscriptHub>("/hubs/transcripts");
+
+        // Graph Communications stateful notifications endpoint.
+        // The SDK is posting to "{service base url}/communications/calls" on join.
+        // We must return 200 OK so the join flow can establish.
+        app.MapPost("/communications/calls", async (HttpRequest request, ILoggerFactory loggerFactory) =>
+        {
+            var log = loggerFactory.CreateLogger("GraphCommsNotifications");
+            using var reader = new StreamReader(request.Body, Encoding.UTF8);
+            var body = await reader.ReadToEndAsync();
+            log.LogInformation("Received /communications/calls notification. BodyLength={Length}", body?.Length ?? 0);
+            return Results.Ok();
+        });
+
+        // Some configurations use a custom callback path; accept it too.
+        app.MapPost("/callback", async (HttpRequest request, ILoggerFactory loggerFactory) =>
+        {
+            var log = loggerFactory.CreateLogger("GraphCommsCallback");
+            using var reader = new StreamReader(request.Body, Encoding.UTF8);
+            var body = await reader.ReadToEndAsync();
+            log.LogInformation("Received /callback notification. BodyLength={Length}", body?.Length ?? 0);
+            return Results.Ok();
+        });
+
         app.MapPost("/api/bot/join", async (JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
         {
             var log = loggerFactory.CreateLogger("TeamsMediaBot.Join");

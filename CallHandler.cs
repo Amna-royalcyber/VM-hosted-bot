@@ -137,6 +137,15 @@ public sealed class CallHandler
             }
         };
 
+        var contextTid = TryGetTenantIdFromTeamsUrl(uri);
+        if (!string.IsNullOrWhiteSpace(contextTid))
+        {
+            logger.LogInformation(
+                "Join context: contextTid={ContextTid}; appTenantId={AppTenantId}",
+                contextTid,
+                tenantId);
+        }
+
         // Keep payload aligned with Graph comms sample for scheduled meeting join:
         // organizer + allowConversationWithoutHost.
         // (joinWebUrl is not present in the sample notification payloads.)
@@ -153,6 +162,49 @@ public sealed class CallHandler
             organizerObjectId);
 
         return (chatInfo, meetingInfo, normalized, organizerObjectId);
+    }
+
+    private static string? TryGetTenantIdFromTeamsUrl(Uri uri)
+    {
+        var raw = GetQueryParameter(uri.Query, "context");
+        if (string.IsNullOrEmpty(raw))
+        {
+            return null;
+        }
+
+        var current = raw;
+        for (var i = 0; i < 3; i++)
+        {
+            string decoded;
+            try
+            {
+                decoded = i == 0 ? current : Uri.UnescapeDataString(current);
+            }
+            catch
+            {
+                return null;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(decoded);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("Tid", out var tid) && tid.ValueKind == JsonValueKind.String)
+                {
+                    return tid.GetString();
+                }
+                if (root.TryGetProperty("tid", out var tidLower) && tidLower.ValueKind == JsonValueKind.String)
+                {
+                    return tidLower.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+                current = decoded;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
