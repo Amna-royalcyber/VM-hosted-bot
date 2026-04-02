@@ -63,7 +63,13 @@ public sealed class BotService
         _graphLogger = new GraphLogger(_settings.ApplicationName);
     }
 
-    public async Task JoinMeetingAsync(string meetingJoinUrl)
+    public Task JoinMeetingAsync(string meetingJoinUrl) =>
+        JoinMeetingAsync(new JoinMeetingRequest { MeetingJoinUrl = meetingJoinUrl });
+
+    /// <summary>
+    /// Join using the same request shape as a typical transcriber <c>POST /api/meetings/join</c> controller.
+    /// </summary>
+    public async Task JoinMeetingAsync(JoinMeetingRequest request)
     {
         EnsureInitialized();
         if (_communicationsClient is null)
@@ -71,9 +77,33 @@ public sealed class BotService
             throw new InvalidOperationException("Communications client is not initialized.");
         }
 
-        _logger.LogInformation("Joining Teams meeting from join URL.");
+        _logger.LogInformation("Joining Teams meeting (Graph Communications).");
         await _awsTranscribeService.StartStreaming();
-        await _callHandler.JoinMeetingByUrlAsync(meetingJoinUrl, _mediaHandler);
+
+        if (!string.IsNullOrWhiteSpace(request.MeetingJoinUrl))
+        {
+            await _callHandler.JoinMeetingByUrlAsync(request.MeetingJoinUrl.Trim(), _mediaHandler);
+        }
+        else if (!string.IsNullOrWhiteSpace(request.ChatThreadId) && !string.IsNullOrWhiteSpace(request.OrganizerObjectId))
+        {
+            var meetingTid = string.IsNullOrWhiteSpace(request.MeetingTenantId)
+                ? _settings.TenantId
+                : request.MeetingTenantId.Trim();
+            var messageId = string.IsNullOrWhiteSpace(request.ChatMessageId) ? "0" : request.ChatMessageId.Trim();
+            await _callHandler.JoinMeetingByCoordinatesAsync(
+                request.ChatThreadId.Trim(),
+                messageId,
+                request.OrganizerObjectId.Trim(),
+                meetingTid,
+                _mediaHandler);
+        }
+        else
+        {
+            throw new ArgumentException(
+                "Provide MeetingJoinUrl, or ChatThreadId and OrganizerObjectId (and optional MeetingTenantId, ChatMessageId). " +
+                "MeetingId alone cannot join a call via Graph Communications in this service.");
+        }
+
         _logger.LogInformation("Join request submitted to Graph.");
     }
 

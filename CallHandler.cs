@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Communications.Calls;
+using Microsoft.Graph.Contracts;
 using Microsoft.Graph.Communications.Calls.Media;
 using Microsoft.Graph.Communications.Client;
 using Microsoft.Graph.Communications.Resources;
@@ -29,41 +30,100 @@ public sealed class CallHandler
 
     public async Task<ICall> JoinMeetingByUrlAsync(string joinUrl, MediaHandler mediaHandler)
     {
+        var (chatInfo, meetingInfo, normalizedUrl, organizerObjectId, meetingContextTenantId) =
+            CreateJoinInfoFromUrl(joinUrl, _logger, _settings.TenantId);
+
+        var joinTenantId = ResolveMeetingTenantId(meetingContextTenantId, _settings.TenantId, _logger);
+        return await SubmitJoinAsync(
+            chatInfo,
+            meetingInfo,
+            joinTenantId,
+            organizerObjectId,
+            normalizedUrl,
+            mediaHandler);
+    }
+
+    /// <summary>
+    /// Join when you already have thread id + organizer (e.g. from calendar/Graph) without a meetup-join URL.
+    /// </summary>
+    public async Task<ICall> JoinMeetingByCoordinatesAsync(
+        string chatThreadId,
+        string chatMessageId,
+        string organizerObjectId,
+        string meetingTenantId,
+        MediaHandler mediaHandler,
+        string? replyChainMessageId = null)
+    {
+        if (string.IsNullOrWhiteSpace(chatThreadId))
+        {
+            throw new ArgumentException("Chat thread id is required.", nameof(chatThreadId));
+        }
+
+        if (string.IsNullOrWhiteSpace(organizerObjectId))
+        {
+            throw new ArgumentException("Organizer object id is required.", nameof(organizerObjectId));
+        }
+
+        var chatInfo = new ChatInfo
+        {
+            ThreadId = chatThreadId.Trim(),
+            MessageId = string.IsNullOrWhiteSpace(chatMessageId) ? "0" : chatMessageId.Trim()
+        };
+
+        if (!string.IsNullOrWhiteSpace(replyChainMessageId))
+        {
+            chatInfo.ReplyChainMessageId = replyChainMessageId.Trim();
+        }
+
+        var meetingInfo = BuildOrganizerMeetingInfo(organizerObjectId.Trim(), meetingTenantId.Trim());
+        var joinTenantId = ResolveMeetingTenantId(meetingTenantId, _settings.TenantId, _logger);
+
+        _logger.LogInformation(
+            "Join by coordinates: threadId={ThreadId}, messageId={MessageId}, organizerOid={OrganizerOid}, joinTenantId={JoinTenantId}",
+            chatInfo.ThreadId,
+            chatInfo.MessageId,
+            organizerObjectId,
+            joinTenantId);
+
+        return await SubmitJoinAsync(
+            chatInfo,
+            meetingInfo,
+            joinTenantId,
+            organizerObjectId,
+            normalizedUrl: null,
+            mediaHandler);
+    }
+
+    private async Task<ICall> SubmitJoinAsync(
+        ChatInfo chatInfo,
+        OrganizerMeetingInfo meetingInfo,
+        string joinTenantId,
+        string organizerObjectId,
+        string? normalizedUrl,
+        MediaHandler mediaHandler)
+    {
         if (_communicationsClient is null)
         {
             throw new InvalidOperationException("Communications client has not been initialized.");
         }
 
-        IMediaSession mediaSession = mediaHandler.CreateMediaSession(_communicationsClient);
-        var (chatInfo, meetingInfo, normalizedUrl, organizerObjectId, meetingContextTenantId) =
-            CreateJoinInfoFromUrl(joinUrl, _logger, _settings.TenantId);
-
-        // Graph expects the meeting's tenant (from join URL context=Tid). Using only appsettings can break
-        // joins if BOT_TENANT_ID/AzureAd:TenantId is wrong or differs from the link.
-        var joinTenantId = ResolveMeetingTenantId(meetingContextTenantId, _settings.TenantId, _logger);
-
-        var joinMeetingParameters = new JoinMeetingParameters(
-            chatInfo,
-            meetingInfo,
-            mediaSession,
-            null,
-            null,
-            false)
+        // Align with Microsoft Graph comms samples (e.g. HueBot JoinCallAsync): 3-arg ctor + explicit scenario id.
+        var mediaSession = mediaHandler.CreateMediaSession(_communicationsClient);
+        var scenarioId = Guid.NewGuid();
+        var joinParams = new JoinMeetingParameters(chatInfo, meetingInfo, mediaSession)
         {
-            TenantId = joinTenantId
+            TenantId = joinTenantId,
         };
 
         ICall call;
         try
         {
-            call = await _communicationsClient
-                .Calls()
-                .AddAsync(joinMeetingParameters);
+            call = await _communicationsClient.Calls().AddAsync(joinParams, scenarioId);
         }
         catch (Microsoft.Graph.Communications.Core.Exceptions.ServiceException ex)
         {
             var detail =
-                $"ThreadId={chatInfo.ThreadId}; MessageId={chatInfo.MessageId}; OrganizerOid={organizerObjectId}; NormalizedUrl={normalizedUrl}";
+                $"ThreadId={chatInfo.ThreadId}; MessageId={chatInfo.MessageId}; ReplyChainMessageId={chatInfo.ReplyChainMessageId}; OrganizerOid={organizerObjectId}; NormalizedUrl={normalizedUrl}";
             if (ex.Message.Contains("source identity", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
@@ -85,7 +145,7 @@ public sealed class CallHandler
             _logger.LogInformation("Call state updated. State: {State}", args.NewResource?.State);
         };
 
-        _logger.LogInformation("Join request submitted. Call ID: {CallId}", call.Id);
+        _logger.LogInformation("Join request submitted. Call ID: {CallId}, ScenarioId={ScenarioId}", call.Id, scenarioId);
         return call;
     }
 
@@ -126,7 +186,29 @@ public sealed class CallHandler
         return meetingContextTenantId;
     }
 
-    private static (ChatInfo ChatInfo, MeetingInfo MeetingInfo, string NormalizedUrl, string OrganizerObjectId, string? MeetingContextTenantId) CreateJoinInfoFromUrl(
+    private static OrganizerMeetingInfo BuildOrganizerMeetingInfo(string organizerObjectId, string? tenantIdForOrganizer)
+    {
+        var user = new Identity { Id = organizerObjectId };
+        if (!string.IsNullOrWhiteSpace(tenantIdForOrganizer))
+        {
+            // Same as Sample.Common JoinInfo.ParseJoinURL — binds organizer to the meeting tenant for Graph.
+            user.SetTenantId(tenantIdForOrganizer.Trim());
+        }
+
+        var meetingInfo = new OrganizerMeetingInfo
+        {
+            Organizer = new IdentitySet { User = user }
+        };
+
+        meetingInfo.AdditionalData = new Dictionary<string, object>
+        {
+            ["allowConversationWithoutHost"] = true
+        };
+
+        return meetingInfo;
+    }
+
+    private static (ChatInfo ChatInfo, OrganizerMeetingInfo MeetingInfo, string NormalizedUrl, string OrganizerObjectId, string? MeetingContextTenantId) CreateJoinInfoFromUrl(
         string joinUrl,
         ILogger logger,
         string tenantId)
@@ -155,9 +237,8 @@ public sealed class CallHandler
             MessageId = messageId
         };
 
-        // Graph requires the real meeting organizer Entra object id — not an empty GUID.
-        // It is in the meetup-join URL as ?context=… JSON field "Oid". Chat-only links often omit it → 404 NotFound.
-        var organizerObjectId = TryGetOrganizerObjectIdFromTeamsUrl(uri);
+        TryParseTeamsJoinContext(uri, out var contextTid, out var organizerObjectId, out var replyChainMessageId);
+
         if (string.IsNullOrWhiteSpace(organizerObjectId))
         {
             throw new ArgumentException(
@@ -168,32 +249,19 @@ public sealed class CallHandler
                 nameof(joinUrl));
         }
 
-        var meetingInfo = new OrganizerMeetingInfo
+        if (!string.IsNullOrWhiteSpace(replyChainMessageId))
         {
-            Organizer = new IdentitySet
-            {
-                User = new Identity
-                {
-                    Id = organizerObjectId
-                }
-            }
-        };
+            chatInfo.ReplyChainMessageId = replyChainMessageId;
+        }
 
-        var contextTid = TryGetTenantIdFromTeamsUrl(uri);
-
-        // Keep payload aligned with Graph comms sample for scheduled meeting join:
-        // organizer + allowConversationWithoutHost.
-        // (joinWebUrl is not present in the sample notification payloads.)
-        meetingInfo.AdditionalData = new Dictionary<string, object>
-        {
-            ["allowConversationWithoutHost"] = true
-        };
+        var meetingInfo = BuildOrganizerMeetingInfo(organizerObjectId, contextTid);
 
         logger.LogInformation(
-            "Join parsed: normalizedUrl={NormalizedUrl}, threadId={ThreadId}, messageId={MessageId}, organizerOid={OrganizerOid}, contextTid={ContextTid}, appTenantId={AppTenantId}",
+            "Join parsed: normalizedUrl={NormalizedUrl}, threadId={ThreadId}, messageId={MessageId}, replyChainMessageId={ReplyChainMessageId}, organizerOid={OrganizerOid}, contextTid={ContextTid}, appTenantId={AppTenantId}",
             normalized,
             chatInfo.ThreadId,
             chatInfo.MessageId,
+            chatInfo.ReplyChainMessageId,
             organizerObjectId,
             contextTid,
             tenantId);
@@ -201,12 +269,23 @@ public sealed class CallHandler
         return (chatInfo, meetingInfo, normalized, organizerObjectId, contextTid);
     }
 
-    private static string? TryGetTenantIdFromTeamsUrl(Uri uri)
+    /// <summary>
+    /// Parses <c>?context=</c> JSON (Tid, Oid, optional MessageId for reply chain) per Microsoft Graph comms JoinInfo sample.
+    /// </summary>
+    private static void TryParseTeamsJoinContext(
+        Uri uri,
+        out string? contextTid,
+        out string? organizerObjectId,
+        out string? replyChainMessageId)
     {
+        contextTid = null;
+        organizerObjectId = null;
+        replyChainMessageId = null;
+
         var raw = GetQueryParameter(uri.Query, "context");
         if (string.IsNullOrEmpty(raw))
         {
-            return null;
+            return;
         }
 
         var current = raw;
@@ -219,7 +298,7 @@ public sealed class CallHandler
             }
             catch
             {
-                return null;
+                return;
             }
 
             try
@@ -228,70 +307,38 @@ public sealed class CallHandler
                 var root = doc.RootElement;
                 if (root.TryGetProperty("Tid", out var tid) && tid.ValueKind == JsonValueKind.String)
                 {
-                    return tid.GetString();
+                    contextTid = tid.GetString();
                 }
-                if (root.TryGetProperty("tid", out var tidLower) && tidLower.ValueKind == JsonValueKind.String)
+                else if (root.TryGetProperty("tid", out var tidLower) && tidLower.ValueKind == JsonValueKind.String)
                 {
-                    return tidLower.GetString();
+                    contextTid = tidLower.GetString();
                 }
-            }
-            catch (JsonException)
-            {
-                current = decoded;
-            }
-        }
 
-        return null;
-    }
-
-    /// <summary>
-    /// Teams encodes join context in the <c>context</c> query parameter (JSON with Tid, Oid, etc.).
-    /// </summary>
-    private static string? TryGetOrganizerObjectIdFromTeamsUrl(Uri uri)
-    {
-        var raw = GetQueryParameter(uri.Query, "context");
-        if (string.IsNullOrEmpty(raw))
-        {
-            return null;
-        }
-
-        // Safe-links and some redirect URLs can double-encode the JSON.
-        // Try decoding multiple times until JSON parse succeeds.
-        var current = raw;
-        for (var i = 0; i < 3; i++)
-        {
-            string decoded;
-            try
-            {
-                decoded = i == 0 ? current : Uri.UnescapeDataString(current);
-            }
-            catch
-            {
-                return null;
-            }
-
-            try
-            {
-                using var doc = JsonDocument.Parse(decoded);
-                var root = doc.RootElement;
                 if (root.TryGetProperty("Oid", out var oid) && oid.ValueKind == JsonValueKind.String)
                 {
-                    return oid.GetString();
+                    organizerObjectId = oid.GetString();
+                }
+                else if (root.TryGetProperty("oid", out var oidLower) && oidLower.ValueKind == JsonValueKind.String)
+                {
+                    organizerObjectId = oidLower.GetString();
                 }
 
-                if (root.TryGetProperty("oid", out var oidLower) && oidLower.ValueKind == JsonValueKind.String)
+                if (root.TryGetProperty("MessageId", out var mid) && mid.ValueKind == JsonValueKind.String)
                 {
-                    return oidLower.GetString();
+                    replyChainMessageId = mid.GetString();
                 }
+                else if (root.TryGetProperty("messageId", out var mid2) && mid2.ValueKind == JsonValueKind.String)
+                {
+                    replyChainMessageId = mid2.GetString();
+                }
+
+                return;
             }
             catch (JsonException)
             {
                 current = decoded;
-                continue;
             }
         }
-
-        return null;
     }
 
     /// <summary>

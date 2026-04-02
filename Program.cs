@@ -105,23 +105,60 @@ public static class Program
         app.MapPost("/callback", (HttpContext ctx, BotService botService, ILoggerFactory loggerFactory) =>
             HandleGraphCallback(ctx, botService, loggerFactory.CreateLogger("GraphCommsCallback")));
 
-        app.MapPost("/api/bot/join", async (JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
+        static async Task<IResult> HandleMeetingsApiJoin(
+            HttpContext ctx,
+            JoinMeetingRequest request,
+            BotService botService,
+            ILogger log)
         {
-            var log = loggerFactory.CreateLogger("TeamsMediaBot.Join");
-
-            if (string.IsNullOrWhiteSpace(request.MeetingJoinUrl))
+            if (string.IsNullOrWhiteSpace(request.MeetingId) &&
+                string.IsNullOrWhiteSpace(request.MeetingJoinUrl) &&
+                string.IsNullOrWhiteSpace(request.ChatThreadId))
             {
-                return Results.BadRequest(new { message = "MeetingJoinUrl is required." });
+                return Results.BadRequest(new { message = "Provide MeetingId, MeetingJoinUrl, or ChatThreadId (+ OrganizerObjectId)." });
             }
+
+            if (string.IsNullOrWhiteSpace(request.MeetingJoinUrl) &&
+                string.IsNullOrWhiteSpace(request.ChatThreadId))
+            {
+                return Results.BadRequest(new
+                {
+                    message = "This bot needs MeetingJoinUrl, or ChatThreadId with OrganizerObjectId, to join via Graph Communications.",
+                    meetingId = request.MeetingId
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.ChatThreadId) &&
+                string.IsNullOrWhiteSpace(request.OrganizerObjectId))
+            {
+                return Results.BadRequest(new { message = "When using ChatThreadId, OrganizerObjectId is required (and MeetingTenantId if not the bot home tenant)." });
+            }
+
+            var parsed = MeetingJoinParser.ParseJoinUrl(request.MeetingJoinUrl);
+            var transcriptKey = !string.IsNullOrWhiteSpace(request.MeetingId)
+                ? request.MeetingId!.Trim()
+                : (!string.IsNullOrWhiteSpace(parsed.JoinMeetingId)
+                    ? parsed.JoinMeetingId
+                    : (!string.IsNullOrWhiteSpace(request.ChatThreadId)
+                        ? request.ChatThreadId.Trim()
+                        : request.MeetingJoinUrl?.Trim())) ?? "unknown";
 
             try
             {
-                await botService.JoinMeetingAsync(request.MeetingJoinUrl);
-                return Results.Ok(new { message = "Join request submitted." });
+                await botService.JoinMeetingAsync(request);
+                return Results.Accepted(
+                    uri: null,
+                    value: new
+                    {
+                        transcriptKey,
+                        joinMeetingId = parsed.JoinMeetingId,
+                        chatThreadId = request.ChatThreadId,
+                        message = "Join request submitted."
+                    });
             }
             catch (ArgumentException ex)
             {
-                log.LogWarning(ex, "Invalid join URL.");
+                log.LogWarning(ex, "Invalid join request.");
                 return Results.BadRequest(new { message = ex.Message });
             }
             catch (Exception ex)
@@ -133,7 +170,59 @@ public static class Program
                         message = "Join meeting failed.",
                         error = ex.Message,
                         inner = ex.InnerException?.Message,
-                        type = ex.GetType().FullName
+                        type = ex.GetType().FullName,
+                        traceId = ctx.TraceIdentifier
+                    },
+                    statusCode: StatusCodes.Status500InternalServerError);
+            }
+        }
+
+        app.MapPost("/api/meetings/join", async (HttpContext ctx, JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
+            await HandleMeetingsApiJoin(ctx, request, botService, loggerFactory.CreateLogger("TeamsMediaBot.Join")));
+
+        app.MapPost("/api/bot/join", async (HttpContext ctx, JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
+        {
+            var log = loggerFactory.CreateLogger("TeamsMediaBot.Join");
+            if (string.IsNullOrWhiteSpace(request.MeetingId) &&
+                string.IsNullOrWhiteSpace(request.MeetingJoinUrl) &&
+                string.IsNullOrWhiteSpace(request.ChatThreadId))
+            {
+                return Results.BadRequest(new { message = "Provide MeetingJoinUrl, or MeetingId with MeetingJoinUrl, or ChatThreadId + OrganizerObjectId." });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.MeetingJoinUrl) &&
+                string.IsNullOrWhiteSpace(request.ChatThreadId))
+            {
+                return Results.BadRequest(new { message = "MeetingJoinUrl (or ChatThreadId + OrganizerObjectId) is required." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.ChatThreadId) &&
+                string.IsNullOrWhiteSpace(request.OrganizerObjectId))
+            {
+                return Results.BadRequest(new { message = "When using ChatThreadId, OrganizerObjectId is required." });
+            }
+
+            try
+            {
+                await botService.JoinMeetingAsync(request);
+                return Results.Ok(new { message = "Join request submitted." });
+            }
+            catch (ArgumentException ex)
+            {
+                log.LogWarning(ex, "Invalid join request.");
+                return Results.BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Join meeting failed.");
+                return Results.Json(
+                    new
+                    {
+                        message = "Join meeting failed.",
+                        error = ex.Message,
+                        inner = ex.InnerException?.Message,
+                        type = ex.GetType().FullName,
+                        traceId = ctx.TraceIdentifier
                     },
                     statusCode: StatusCodes.Status500InternalServerError);
             }
