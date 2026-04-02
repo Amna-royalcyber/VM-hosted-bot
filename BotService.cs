@@ -157,7 +157,7 @@ public sealed class BotService
 
 public sealed class ClientCredentialsAuthenticationProvider : IRequestAuthenticationProvider
 {
-    private static readonly TokenRequestContext GraphScope = new(new[] { "https://graph.microsoft.com/.default" });
+    private static readonly string[] GraphScopes = { "https://graph.microsoft.com/.default" };
     private readonly TokenCredential _credential;
     private readonly string _tenantId;
 
@@ -169,7 +169,11 @@ public sealed class ClientCredentialsAuthenticationProvider : IRequestAuthentica
 
     public async Task AuthenticateOutboundRequestAsync(HttpRequestMessage request, string tenant)
     {
-        AccessToken token = await _credential.GetTokenAsync(GraphScope, default);
+        // SDK passes tenant from the join/call context (see Graph comms samples). Using only the
+        // credential's default tenant without this can contribute to "Call source identity invalid".
+        var tenantForToken = string.IsNullOrWhiteSpace(tenant) ? _tenantId : tenant.Trim();
+        var context = new TokenRequestContext(GraphScopes, tenantId: tenantForToken);
+        AccessToken token = await _credential.GetTokenAsync(context, default);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
     }
 

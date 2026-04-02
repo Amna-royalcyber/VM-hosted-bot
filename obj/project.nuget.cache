@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "LmoXQgmCues=",
+  "dgSpecHash": "znR+0MVdZPY=",
   "success": true,
-  "projectFilePath": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
+  "projectFilePath": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\AmnaZahid\\.nuget\\packages\\awssdk.core\\4.0.3.25\\awssdk.core.4.0.3.25.nupkg.sha512",
     "C:\\Users\\AmnaZahid\\.nuget\\packages\\awssdk.transcribeservice\\4.0.5.10\\awssdk.transcribeservice.4.0.5.10.nupkg.sha512",

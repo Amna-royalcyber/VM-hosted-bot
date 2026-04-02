@@ -58,8 +58,20 @@ public sealed class CallHandler
         }
         catch (Microsoft.Graph.Communications.Core.Exceptions.ServiceException ex)
         {
+            var detail =
+                $"ThreadId={chatInfo.ThreadId}; MessageId={chatInfo.MessageId}; OrganizerOid={organizerObjectId}; NormalizedUrl={normalizedUrl}";
+            if (ex.Message.Contains("source identity", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Graph rejected the bot as a calling identity (403). {detail} " +
+                    "If Entra app permissions and Teams channel calling are already set, create a Teams application access policy for this app id and grant it tenant-wide: " +
+                    "New-CsApplicationAccessPolicy -Identity TeamsBotPolicy -AppIds <AzureAd ClientId> -Description '...'; " +
+                    "Grant-CsApplicationAccessPolicy -PolicyName TeamsBotPolicy -Global (MicrosoftTeams PowerShell).",
+                    ex);
+            }
+
             throw new InvalidOperationException(
-                $"Graph join failed (likely meeting/thread not resolvable). ThreadId={chatInfo.ThreadId}; MessageId={chatInfo.MessageId}; OrganizerOid={organizerObjectId}; NormalizedUrl={normalizedUrl}",
+                $"Graph join failed (likely meeting/thread not resolvable). {detail}",
                 ex);
         }
 
