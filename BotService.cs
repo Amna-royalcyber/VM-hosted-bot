@@ -41,6 +41,7 @@ public sealed class BotService
     private readonly MediaHandler _mediaHandler;
     private readonly AwsTranscribeService _awsTranscribeService;
     private readonly ILogger<BotService> _logger;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly IGraphLogger _graphLogger;
     private ICommunicationsClient? _communicationsClient;
     private bool _isInitialized;
@@ -50,12 +51,14 @@ public sealed class BotService
         CallHandler callHandler,
         MediaHandler mediaHandler,
         AwsTranscribeService awsTranscribeService,
+        ILoggerFactory loggerFactory,
         ILogger<BotService> logger)
     {
         _settings = settings;
         _callHandler = callHandler;
         _mediaHandler = mediaHandler;
         _awsTranscribeService = awsTranscribeService;
+        _loggerFactory = loggerFactory;
         _logger = logger;
         _graphLogger = new GraphLogger(_settings.ApplicationName);
     }
@@ -100,7 +103,8 @@ public sealed class BotService
     private ICommunicationsClient CreateCommunicationsClient()
     {
         var credential = new ClientSecretCredential(_settings.TenantId, _settings.ClientId, _settings.ClientSecret);
-        var authProvider = new ClientCredentialsAuthenticationProvider(credential, _settings.TenantId);
+        var authLogger = _loggerFactory.CreateLogger<ClientCredentialsAuthenticationProvider>();
+        var authProvider = new ClientCredentialsAuthenticationProvider(credential, _settings.TenantId, authLogger);
 
         // SDK requires BOTH: service base (origin) and notification (callback) URLs.
         // Bot:CallbackUrl / BOT_SERVICE_BASE_URL should be the full HTTPS callback, e.g. https://host/callback
@@ -160,11 +164,16 @@ public sealed class ClientCredentialsAuthenticationProvider : IRequestAuthentica
     private static readonly string[] GraphScopes = { "https://graph.microsoft.com/.default" };
     private readonly TokenCredential _credential;
     private readonly string _tenantId;
+    private readonly ILogger<ClientCredentialsAuthenticationProvider> _logger;
 
-    public ClientCredentialsAuthenticationProvider(TokenCredential credential, string tenantId)
+    public ClientCredentialsAuthenticationProvider(
+        TokenCredential credential,
+        string tenantId,
+        ILogger<ClientCredentialsAuthenticationProvider> logger)
     {
         _credential = credential;
         _tenantId = tenantId;
+        _logger = logger;
     }
 
     public async Task AuthenticateOutboundRequestAsync(HttpRequestMessage request, string tenant)
@@ -175,6 +184,17 @@ public sealed class ClientCredentialsAuthenticationProvider : IRequestAuthentica
         var context = new TokenRequestContext(GraphScopes, tenantId: tenantForToken);
         AccessToken token = await _credential.GetTokenAsync(context, default);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+
+        // Full JWT is a secret. Set PRINT_GRAPH_ACCESS_TOKEN=1 only for local debugging; disable afterward.
+        var printToken = Environment.GetEnvironmentVariable("PRINT_GRAPH_ACCESS_TOKEN");
+        if (string.Equals(printToken, "1", StringComparison.Ordinal) ||
+            string.Equals(printToken, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "PRINT_GRAPH_ACCESS_TOKEN enabled — Graph access token (tenant used for token: {TenantForToken}): {AccessToken}",
+                tenantForToken,
+                token.Token);
+        }
     }
 
     public Task<RequestValidationResult> ValidateInboundRequestAsync(HttpRequestMessage request)
