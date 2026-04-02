@@ -74,6 +74,17 @@ public sealed class BotService
         _logger.LogInformation("Join request submitted to Graph.");
     }
 
+    public Task<HttpResponseMessage> ProcessNotificationAsync(HttpRequestMessage request)
+    {
+        EnsureInitialized();
+        if (_communicationsClient is null)
+        {
+            throw new InvalidOperationException("Communications client is not initialized.");
+        }
+
+        return _communicationsClient.ProcessNotificationAsync(request);
+    }
+
     private void EnsureInitialized()
     {
         if (_isInitialized)
@@ -106,8 +117,8 @@ public sealed class BotService
             throw new InvalidOperationException("Callback URL must use HTTPS.");
         }
 
-        var authority = notificationUri.GetLeftPart(UriPartial.Authority);
-        var serviceBaseUri = new Uri(authority + "/", UriKind.Absolute);
+        // Graph endpoint for place-call/join (SDK calls this "service base URL").
+        var serviceBaseUri = new Uri("https://graph.microsoft.com/v1.0", UriKind.Absolute);
 
         var fqdn = string.IsNullOrWhiteSpace(_settings.MediaServiceFqdn)
             ? notificationUri.Host

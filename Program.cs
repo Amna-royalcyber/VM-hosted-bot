@@ -55,27 +55,55 @@ public static class Program
 
         app.MapHub<TranscriptHub>("/hubs/transcripts");
 
-        // Graph Communications stateful notifications endpoint.
-        // The SDK is posting to "{service base url}/communications/calls" on join.
-        // We must return 200 OK so the join flow can establish.
-        app.MapPost("/communications/calls", async (HttpRequest request, ILoggerFactory loggerFactory) =>
+        static async Task<IResult> HandleGraphCallback(HttpContext ctx, BotService botService, ILogger log)
         {
-            var log = loggerFactory.CreateLogger("GraphCommsNotifications");
-            using var reader = new StreamReader(request.Body, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync();
-            log.LogInformation("Received /communications/calls notification. BodyLength={Length}", body?.Length ?? 0);
-            return Results.Ok();
-        });
+            // Convert ASP.NET request into HttpRequestMessage for the comms SDK.
+            var req = ctx.Request;
+            var uri = new Uri($"{req.Scheme}://{req.Host}{req.Path}{req.QueryString}");
+            var msg = new HttpRequestMessage(new HttpMethod(req.Method), uri);
 
-        // Some configurations use a custom callback path; accept it too.
-        app.MapPost("/callback", async (HttpRequest request, ILoggerFactory loggerFactory) =>
-        {
-            var log = loggerFactory.CreateLogger("GraphCommsCallback");
-            using var reader = new StreamReader(request.Body, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync();
-            log.LogInformation("Received /callback notification. BodyLength={Length}", body?.Length ?? 0);
-            return Results.Ok();
-        });
+            foreach (var header in req.Headers)
+            {
+                if (!msg.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()))
+                {
+                    msg.Content ??= new StreamContent(req.Body);
+                    msg.Content.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
+                }
+            }
+
+            if (msg.Content is null)
+            {
+                msg.Content = new StreamContent(req.Body);
+            }
+
+            var sdkResponse = await botService.ProcessNotificationAsync(msg);
+
+            ctx.Response.StatusCode = (int)sdkResponse.StatusCode;
+            foreach (var header in sdkResponse.Headers)
+            {
+                ctx.Response.Headers[header.Key] = header.Value.ToArray();
+            }
+            if (sdkResponse.Content is not null)
+            {
+                foreach (var header in sdkResponse.Content.Headers)
+                {
+                    ctx.Response.Headers[header.Key] = header.Value.ToArray();
+                }
+                // ASP.NET Core sets these automatically for some responses
+                ctx.Response.Headers.Remove("transfer-encoding");
+                await sdkResponse.Content.CopyToAsync(ctx.Response.Body);
+            }
+
+            log.LogInformation("Processed Graph comms callback. Status={Status}", (int)sdkResponse.StatusCode);
+            return Results.Empty;
+        }
+
+        // Graph Communications notifications endpoint(s).
+        app.MapPost("/communications/calls", (HttpContext ctx, BotService botService, ILoggerFactory loggerFactory) =>
+            HandleGraphCallback(ctx, botService, loggerFactory.CreateLogger("GraphCommsNotifications")));
+
+        app.MapPost("/callback", (HttpContext ctx, BotService botService, ILoggerFactory loggerFactory) =>
+            HandleGraphCallback(ctx, botService, loggerFactory.CreateLogger("GraphCommsCallback")));
 
         app.MapPost("/api/bot/join", async (JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
         {
