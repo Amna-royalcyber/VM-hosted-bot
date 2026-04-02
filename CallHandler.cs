@@ -35,7 +35,8 @@ public sealed class CallHandler
         }
 
         IMediaSession mediaSession = mediaHandler.CreateMediaSession(_communicationsClient);
-        var (chatInfo, meetingInfo) = CreateJoinInfoFromUrl(joinUrl, _logger);
+        var (chatInfo, meetingInfo, normalizedUrl, organizerObjectId) =
+            CreateJoinInfoFromUrl(joinUrl, _logger, _settings.TenantId);
 
         var joinMeetingParameters = new JoinMeetingParameters(
             chatInfo,
@@ -48,9 +49,19 @@ public sealed class CallHandler
             TenantId = _settings.TenantId
         };
 
-        ICall call = await _communicationsClient
-            .Calls()
-            .AddAsync(joinMeetingParameters);
+        ICall call;
+        try
+        {
+            call = await _communicationsClient
+                .Calls()
+                .AddAsync(joinMeetingParameters);
+        }
+        catch (Microsoft.Graph.Communications.Core.Exceptions.ServiceException ex)
+        {
+            throw new InvalidOperationException(
+                $"Graph join failed (likely meeting/thread not resolvable). ThreadId={chatInfo.ThreadId}; MessageId={chatInfo.MessageId}; OrganizerOid={organizerObjectId}; NormalizedUrl={normalizedUrl}",
+                ex);
+        }
 
         call.OnUpdated += (_, args) =>
         {
@@ -73,7 +84,10 @@ public sealed class CallHandler
     /// Parses a Teams meeting join URL (meetup-join) into ChatInfo / MeetingInfo.
     /// ThreadId must be the thread segment (e.g. 19:meeting_...@thread.v2), not the full URL — otherwise Graph returns 404 NotFound.
     /// </summary>
-    private static (ChatInfo ChatInfo, MeetingInfo MeetingInfo) CreateJoinInfoFromUrl(string joinUrl, ILogger logger)
+    private static (ChatInfo ChatInfo, MeetingInfo MeetingInfo, string NormalizedUrl, string OrganizerObjectId) CreateJoinInfoFromUrl(
+        string joinUrl,
+        ILogger logger,
+        string tenantId)
     {
         if (string.IsNullOrWhiteSpace(joinUrl))
         {
@@ -125,10 +139,19 @@ public sealed class CallHandler
 
         meetingInfo.AdditionalData = new Dictionary<string, object>
         {
-            ["joinWebUrl"] = normalized
+            ["joinWebUrl"] = normalized,
+            // Example payloads from Graph comms samples set this to true.
+            ["allowConversationWithoutHost"] = true
         };
 
-        return (chatInfo, meetingInfo);
+        logger.LogInformation(
+            "Join parsed: normalizedUrl={NormalizedUrl}, threadId={ThreadId}, messageId={MessageId}, organizerOid={OrganizerOid}",
+            normalized,
+            chatInfo.ThreadId,
+            chatInfo.MessageId,
+            organizerObjectId);
+
+        return (chatInfo, meetingInfo, normalized, organizerObjectId);
     }
 
     /// <summary>
@@ -142,24 +165,40 @@ public sealed class CallHandler
             return null;
         }
 
-        var decoded = Uri.UnescapeDataString(raw);
-        try
+        // Safe-links and some redirect URLs can double-encode the JSON.
+        // Try decoding multiple times until JSON parse succeeds.
+        var current = raw;
+        for (var i = 0; i < 3; i++)
         {
-            using var doc = JsonDocument.Parse(decoded);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("Oid", out var oid) && oid.ValueKind == JsonValueKind.String)
+            string decoded;
+            try
             {
-                return oid.GetString();
+                decoded = i == 0 ? current : Uri.UnescapeDataString(current);
+            }
+            catch
+            {
+                return null;
             }
 
-            if (root.TryGetProperty("oid", out var oidLower) && oidLower.ValueKind == JsonValueKind.String)
+            try
             {
-                return oidLower.GetString();
+                using var doc = JsonDocument.Parse(decoded);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("Oid", out var oid) && oid.ValueKind == JsonValueKind.String)
+                {
+                    return oid.GetString();
+                }
+
+                if (root.TryGetProperty("oid", out var oidLower) && oidLower.ValueKind == JsonValueKind.String)
+                {
+                    return oidLower.GetString();
+                }
             }
-        }
-        catch (JsonException)
-        {
-            return null;
+            catch (JsonException)
+            {
+                current = decoded;
+                continue;
+            }
         }
 
         return null;
@@ -263,8 +302,8 @@ public sealed class CallHandler
         var meetupMatch = MeetupJoinRegex.Match(uri.AbsolutePath);
         if (meetupMatch.Success)
         {
-            threadId = Uri.UnescapeDataString(meetupMatch.Groups[1].Value);
-            messageId = Uri.UnescapeDataString(meetupMatch.Groups[2].Value);
+            threadId = FullyUnescape(meetupMatch.Groups[1].Value);
+            messageId = FullyUnescape(meetupMatch.Groups[2].Value);
             return true;
         }
 
@@ -272,7 +311,7 @@ public sealed class CallHandler
         var chatMatch = ChatMeetingRegex.Match(uri.AbsolutePath);
         if (chatMatch.Success)
         {
-            threadId = Uri.UnescapeDataString(chatMatch.Groups[1].Value);
+            threadId = FullyUnescape(chatMatch.Groups[1].Value);
             messageId = "0";
             return true;
         }
@@ -284,8 +323,8 @@ public sealed class CallHandler
 
         if (meetupIdx >= 0 && meetupIdx + 2 < segments.Length)
         {
-            threadId = Uri.UnescapeDataString(segments[meetupIdx + 1]);
-            messageId = Uri.UnescapeDataString(segments[meetupIdx + 2]);
+            threadId = FullyUnescape(segments[meetupIdx + 1]);
+            messageId = FullyUnescape(segments[meetupIdx + 2]);
             return true;
         }
 
@@ -295,12 +334,30 @@ public sealed class CallHandler
         if (chatIdx >= 0 && chatIdx + 2 < segments.Length &&
             segments[chatIdx + 2].Equals("conversations", StringComparison.OrdinalIgnoreCase))
         {
-            threadId = Uri.UnescapeDataString(segments[chatIdx + 1]);
+            threadId = FullyUnescape(segments[chatIdx + 1]);
             messageId = "0";
             return true;
         }
 
         return false;
+    }
+
+    private static string FullyUnescape(string value)
+    {
+        // Some wrapper links double-encode path segments (e.g. %253a => %3a).
+        // Unescape multiple times so the final output matches what Graph expects.
+        var current = value;
+        for (var i = 0; i < 3; i++)
+        {
+            var decoded = Uri.UnescapeDataString(current);
+            if (decoded == current)
+            {
+                break;
+            }
+            current = decoded;
+        }
+
+        return current;
     }
 
     private static readonly Regex MeetupJoinRegex = new(
