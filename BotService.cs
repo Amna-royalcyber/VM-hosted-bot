@@ -102,6 +102,11 @@ public sealed class BotService
 
     private ICommunicationsClient CreateCommunicationsClient()
     {
+        _logger.LogInformation(
+            "Graph Communications identity: ClientId={ClientId}, TenantId={TenantId} (BOT_CLIENT_ID/BOT_TENANT_ID override appsettings when set).",
+            _settings.ClientId,
+            _settings.TenantId);
+
         var credential = new ClientSecretCredential(_settings.TenantId, _settings.ClientId, _settings.ClientSecret);
         var authLogger = _loggerFactory.CreateLogger<ClientCredentialsAuthenticationProvider>();
         var authProvider = new ClientCredentialsAuthenticationProvider(credential, _settings.TenantId, authLogger);

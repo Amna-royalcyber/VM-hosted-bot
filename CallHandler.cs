@@ -35,8 +35,12 @@ public sealed class CallHandler
         }
 
         IMediaSession mediaSession = mediaHandler.CreateMediaSession(_communicationsClient);
-        var (chatInfo, meetingInfo, normalizedUrl, organizerObjectId) =
+        var (chatInfo, meetingInfo, normalizedUrl, organizerObjectId, meetingContextTenantId) =
             CreateJoinInfoFromUrl(joinUrl, _logger, _settings.TenantId);
+
+        // Graph expects the meeting's tenant (from join URL context=Tid). Using only appsettings can break
+        // joins if BOT_TENANT_ID/AzureAd:TenantId is wrong or differs from the link.
+        var joinTenantId = ResolveMeetingTenantId(meetingContextTenantId, _settings.TenantId, _logger);
 
         var joinMeetingParameters = new JoinMeetingParameters(
             chatInfo,
@@ -46,7 +50,7 @@ public sealed class CallHandler
             null,
             false)
         {
-            TenantId = _settings.TenantId
+            TenantId = joinTenantId
         };
 
         ICall call;
@@ -63,10 +67,11 @@ public sealed class CallHandler
             if (ex.Message.Contains("source identity", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"Graph rejected the bot as a calling identity (403). {detail} " +
-                    "If Entra app permissions and Teams channel calling are already set, create a Teams application access policy for this app id and grant it tenant-wide: " +
-                    "New-CsApplicationAccessPolicy -Identity TeamsBotPolicy -AppIds <AzureAd ClientId> -Description '...'; " +
-                    "Grant-CsApplicationAccessPolicy -PolicyName TeamsBotPolicy -Global (MicrosoftTeams PowerShell).",
+                    $"Graph rejected the bot as a calling identity (403). {detail}; JoinTenantId={joinTenantId}; BotClientId={_settings.ClientId}. " +
+                    "Teams: ensure Application access policies include this ClientId for the meeting organizer's user: " +
+                    "resolve OrganizerOid in Entra, then Get-CsOnlineUser -Identity <organizer UPN> | Select ApplicationAccessPolicy; " +
+                    "if a Tag: policy is shown, add this ClientId to that policy's AppIds (Set-CsApplicationAccessPolicy -AppIds @{Add='...'}). " +
+                    "Also verify Global/TeamsBotPolicy and Grant-CsApplicationAccessPolicy -Global as needed.",
                     ex);
             }
 
@@ -96,7 +101,32 @@ public sealed class CallHandler
     /// Parses a Teams meeting join URL (meetup-join) into ChatInfo / MeetingInfo.
     /// ThreadId must be the thread segment (e.g. 19:meeting_...@thread.v2), not the full URL — otherwise Graph returns 404 NotFound.
     /// </summary>
-    private static (ChatInfo ChatInfo, MeetingInfo MeetingInfo, string NormalizedUrl, string OrganizerObjectId) CreateJoinInfoFromUrl(
+    private static string ResolveMeetingTenantId(string? meetingContextTenantId, string configuredTenantId, ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(meetingContextTenantId))
+        {
+            logger.LogInformation("Join: no context Tid in URL; using configured tenant {TenantId}.", configuredTenantId);
+            return configuredTenantId;
+        }
+
+        if (!Guid.TryParse(meetingContextTenantId, out _))
+        {
+            logger.LogWarning("Join: context Tid is not a valid GUID; using configured tenant.");
+            return configuredTenantId;
+        }
+
+        if (!string.Equals(meetingContextTenantId, configuredTenantId, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning(
+                "Join: meeting context Tid {MeetingTid} differs from configured tenant {ConfiguredTenantId}. Using meeting Tid for JoinMeetingParameters.",
+                meetingContextTenantId,
+                configuredTenantId);
+        }
+
+        return meetingContextTenantId;
+    }
+
+    private static (ChatInfo ChatInfo, MeetingInfo MeetingInfo, string NormalizedUrl, string OrganizerObjectId, string? MeetingContextTenantId) CreateJoinInfoFromUrl(
         string joinUrl,
         ILogger logger,
         string tenantId)
@@ -150,13 +180,6 @@ public sealed class CallHandler
         };
 
         var contextTid = TryGetTenantIdFromTeamsUrl(uri);
-        if (!string.IsNullOrWhiteSpace(contextTid))
-        {
-            logger.LogInformation(
-                "Join context: contextTid={ContextTid}; appTenantId={AppTenantId}",
-                contextTid,
-                tenantId);
-        }
 
         // Keep payload aligned with Graph comms sample for scheduled meeting join:
         // organizer + allowConversationWithoutHost.
@@ -167,13 +190,15 @@ public sealed class CallHandler
         };
 
         logger.LogInformation(
-            "Join parsed: normalizedUrl={NormalizedUrl}, threadId={ThreadId}, messageId={MessageId}, organizerOid={OrganizerOid}",
+            "Join parsed: normalizedUrl={NormalizedUrl}, threadId={ThreadId}, messageId={MessageId}, organizerOid={OrganizerOid}, contextTid={ContextTid}, appTenantId={AppTenantId}",
             normalized,
             chatInfo.ThreadId,
             chatInfo.MessageId,
-            organizerObjectId);
+            organizerObjectId,
+            contextTid,
+            tenantId);
 
-        return (chatInfo, meetingInfo, normalized, organizerObjectId);
+        return (chatInfo, meetingInfo, normalized, organizerObjectId, contextTid);
     }
 
     private static string? TryGetTenantIdFromTeamsUrl(Uri uri)
