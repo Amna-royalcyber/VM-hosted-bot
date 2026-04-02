@@ -163,6 +163,11 @@ public sealed class BotService
             ? notificationUri.Host
             : _settings.MediaServiceFqdn.Trim();
 
+        _logger.LogInformation(
+            "Media Platform ServiceFqdn={MediaFqdn} (must match the TLS cert CN/SAN on this VM). Callback host={CallbackHost}. If these differ, set Media:ServiceFqdn or BOT_MEDIA_SERVICE_FQDN to the cert name.",
+            fqdn,
+            notificationUri.Host);
+
         if (!IPAddress.TryParse(_settings.MediaPublicIp.Trim(), out var publicIp))
         {
             throw new InvalidOperationException(
