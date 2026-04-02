@@ -137,10 +137,11 @@ public sealed class CallHandler
             }
         };
 
+        // Keep payload aligned with Graph comms sample for scheduled meeting join:
+        // organizer + allowConversationWithoutHost.
+        // (joinWebUrl is not present in the sample notification payloads.)
         meetingInfo.AdditionalData = new Dictionary<string, object>
         {
-            ["joinWebUrl"] = normalized,
-            // Example payloads from Graph comms samples set this to true.
             ["allowConversationWithoutHost"] = true
         };
 
