@@ -107,6 +107,8 @@ public sealed class CallHandler
             throw new InvalidOperationException("Communications client has not been initialized.");
         }
 
+        _logger.LogInformation("Joining with TenantId={TenantId}, Organizer={Organizer}", joinTenantId, organizerObjectId);
+
         // Align with Microsoft Graph comms samples (e.g. HueBot JoinCallAsync): 3-arg ctor + explicit scenario id.
         var mediaSession = mediaHandler.CreateMediaSession(_communicationsClient);
         var scenarioId = Guid.NewGuid();
