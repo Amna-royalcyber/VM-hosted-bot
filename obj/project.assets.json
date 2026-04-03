@@ -7957,6 +7957,7 @@
       "Azure.Identity >= 1.20.0",
       "Microsoft.Extensions.Hosting >= 10.0.5",
       "Microsoft.Extensions.Logging.Console >= 10.0.5",
+      "Microsoft.Graph >= 5.92.0",
       "Microsoft.Graph.Communications.Calls >= 1.2.0.15690",
       "Microsoft.Graph.Communications.Calls.Media >= 1.2.0.15690",
       "Microsoft.Graph.Communications.Client >= 1.2.0.15690",
@@ -7970,11 +7971,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
+      "projectUniqueName": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
       "projectName": "TeamsMediaBot",
-      "projectPath": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
+      "projectPath": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
       "packagesPath": "C:\\Users\\AmnaZahid\\.nuget\\packages\\",
-      "outputPath": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\obj\\",
+      "outputPath": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\AmnaZahid\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -8026,6 +8027,10 @@
           "Microsoft.Extensions.Logging.Console": {
             "target": "Package",
             "version": "[10.0.5, )"
+          },
+          "Microsoft.Graph": {
+            "target": "Package",
+            "version": "[5.92.0, )"
           },
           "Microsoft.Graph.Communications.Calls": {
             "target": "Package",
