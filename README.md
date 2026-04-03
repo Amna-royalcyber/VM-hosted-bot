@@ -64,7 +64,7 @@ Values are read from **environment variables first**, then **`appsettings.json`*
 
 | Section | Purpose |
 |---------|--------|
-| `AzureAd` | `TenantId`, `ClientId`, `ClientSecret` for client-credentials Graph token. **Do not commit production secrets**; use env vars or a secret store. |
+| `AzureAd` | `TenantId`, `ClientId`, `ClientSecret` for client-credentials Graph token. The **Graph Communications** logger and client builder use **`ClientId`** as the application identifier (no separate display name). **Do not commit production secrets**; use env vars or a secret store. |
 | `Bot` | `CallbackUrl` — full HTTPS URL to **`/callback`** (or the path your Azure Bot uses). |
 | `AWS` | `Region` for Transcribe (overridable by `AWS_REGION`). |
 | `Media` | Certificate thumbprint, public IP, internal/public ports (**8445**), **`ServiceFqdn`** (must match cert **CN/SAN** even if callback host differs). |
@@ -82,7 +82,6 @@ Values are read from **environment variables first**, then **`appsettings.json`*
 | `BOT_MEDIA_INSTANCE_INTERNAL_PORT` | `Media:InstanceInternalPort` |
 | `BOT_MEDIA_INSTANCE_PUBLIC_PORT` | `Media:InstancePublicPort` |
 | `BOT_MEDIA_SERVICE_FQDN` | `Media:ServiceFqdn` (**use when callback host ≠ cert name**) |
-| `BOT_APP_NAME` | Application name for Graph logger |
 | `AWS_REGION` | AWS region for Transcribe |
 
 ---

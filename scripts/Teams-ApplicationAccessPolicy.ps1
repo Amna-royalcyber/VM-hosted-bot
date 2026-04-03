@@ -13,7 +13,7 @@ param(
     [string] $BotAppId = "8f992da5-20ea-42a1-bf11-0a09ba42b35c",
 
     [Parameter(Mandatory = $false)]
-    [string] $PolicyIdentity = "TeamsMediaBotApplicationAccessPolicy"
+    [string] $PolicyIdentity = "GraphCallingApplicationAccessPolicy"
 )
 
 $ErrorActionPreference = "Stop"

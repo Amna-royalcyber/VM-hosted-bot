@@ -28,7 +28,6 @@ public static class Program
             TenantId = GetConfig(builder.Configuration, "BOT_TENANT_ID", "AzureAd:TenantId"),
             ClientId = GetConfig(builder.Configuration, "BOT_CLIENT_ID", "AzureAd:ClientId"),
             ClientSecret = GetConfig(builder.Configuration, "BOT_CLIENT_SECRET", "AzureAd:ClientSecret"),
-            ApplicationName = Environment.GetEnvironmentVariable("BOT_APP_NAME") ?? "TeamsMediaBot",
             ServiceBaseUrl = GetConfig(builder.Configuration, "BOT_SERVICE_BASE_URL", "Bot:CallbackUrl"),
             AwsRegion = GetConfig(builder.Configuration, "AWS_REGION", "AWS:Region"),
             MediaCertificateThumbprint = GetConfig(builder.Configuration, "BOT_MEDIA_CERT_THUMBPRINT", "Media:CertificateThumbprint"),
@@ -178,11 +177,11 @@ public static class Program
         }
 
         app.MapPost("/api/meetings/join", async (HttpContext ctx, JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
-            await HandleMeetingsApiJoin(ctx, request, botService, loggerFactory.CreateLogger("TeamsMediaBot.Join")));
+            await HandleMeetingsApiJoin(ctx, request, botService, loggerFactory.CreateLogger("Join")));
 
         app.MapPost("/api/bot/join", async (HttpContext ctx, JoinMeetingRequest request, BotService botService, ILoggerFactory loggerFactory) =>
         {
-            var log = loggerFactory.CreateLogger("TeamsMediaBot.Join");
+            var log = loggerFactory.CreateLogger("Join");
             if (string.IsNullOrWhiteSpace(request.MeetingId) &&
                 string.IsNullOrWhiteSpace(request.MeetingJoinUrl) &&
                 string.IsNullOrWhiteSpace(request.ChatThreadId))

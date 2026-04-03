@@ -17,7 +17,6 @@ public sealed class BotSettings
     public required string TenantId { get; init; }
     public required string ClientId { get; init; }
     public required string ClientSecret { get; init; }
-    public required string ApplicationName { get; init; }
     public required string ServiceBaseUrl { get; init; }
     public required string AwsRegion { get; init; }
 
@@ -60,7 +59,7 @@ public sealed class BotService
         _awsTranscribeService = awsTranscribeService;
         _loggerFactory = loggerFactory;
         _logger = logger;
-        _graphLogger = new GraphLogger(_settings.ApplicationName);
+        _graphLogger = new GraphLogger(_settings.ClientId);
     }
 
     public Task JoinMeetingAsync(string meetingJoinUrl) =>
@@ -189,7 +188,7 @@ public sealed class BotService
 
         return new CommunicationsClientBuilder(
                 _settings.ClientId,
-                _settings.ApplicationName,
+                _settings.ClientId,
                 _graphLogger)
             .SetAuthenticationProvider(authProvider)
             .SetServiceBaseUrl(serviceBaseUri)
