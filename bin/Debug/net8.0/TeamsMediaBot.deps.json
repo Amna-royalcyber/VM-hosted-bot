@@ -16,6 +16,7 @@
           "Microsoft.Graph.Communications.Calls": "1.2.0.15690",
           "Microsoft.Graph.Communications.Calls.Media": "1.2.0.15690",
           "Microsoft.Graph.Communications.Client": "1.2.0.15690",
+          "Microsoft.Graph.Communications.Core": "1.2.0.15690",
           "Microsoft.Skype.Bots.Media": "1.31.0.225-preview"
         },
         "runtime": {

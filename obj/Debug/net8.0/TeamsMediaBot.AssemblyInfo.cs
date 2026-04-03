@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TeamsMediaBot")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f79980332fd133fe0bd3133ba8542366f09d724a")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e58e28b12c1b433194ea887c6e82c6d6f1fff573")]
 [assembly: System.Reflection.AssemblyProductAttribute("TeamsMediaBot")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TeamsMediaBot")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
