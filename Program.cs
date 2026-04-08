@@ -52,9 +52,17 @@ public static class Program
             MediaUdpPortMax = ReadOptionalUInt(builder.Configuration, "BOT_MEDIA_UDP_PORT_MAX", "Media:UdpPortMax"),
             MediaServiceFqdn = ReadOptional(builder.Configuration, "BOT_MEDIA_SERVICE_FQDN", "Media:ServiceFqdn"),
             JoinMeetingSubject = ReadOptional(builder.Configuration, "BOT_JOIN_MEETING_SUBJECT", "Bot:JoinMeetingSubject"),
-            TranscriptBroadcastPartials = ReadBool(builder.Configuration, "BOT_TRANSCRIPT_BROADCAST_PARTIALS", "Bot:TranscriptBroadcastPartials", defaultValue: false)
+            TranscriptBroadcastPartials = ReadBool(builder.Configuration, "BOT_TRANSCRIPT_BROADCAST_PARTIALS", "Bot:TranscriptBroadcastPartials", defaultValue: false),
+            TranscribeAudioChunkMilliseconds = ReadInt(builder.Configuration, "BOT_TRANSCRIBE_CHUNK_MS", "Bot:TranscribeAudioChunkMilliseconds", 100),
+            TranscribePartialMinIntervalMilliseconds = ReadInt(builder.Configuration, "BOT_TRANSCRIBE_PARTIAL_MS", "Bot:TranscribePartialMinIntervalMilliseconds", 90),
+            TranscriptTimelineMergeMilliseconds = ReadInt(builder.Configuration, "BOT_TRANSCRIPT_TIMELINE_MS", "Bot:TranscriptTimelineMergeMilliseconds", 20),
+            TranscriptAlbEndpoint = ReadOptional(builder.Configuration, "BOT_TRANSCRIPT_ALB_ENDPOINT", "Bot:TranscriptAlbEndpoint")
         });
 
+        builder.Services.AddHttpClient("AlbTranscriptSender");
+        builder.Services.AddSingleton<MeetingContextStore>();
+        builder.Services.AddSingleton<TranscriptAlbSender>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptAlbSender>());
         builder.Services.AddSingleton<TranscriptBroadcaster>();
         builder.Services.AddSingleton<TranscriptAggregator>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptAggregator>());

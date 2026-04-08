@@ -47,8 +47,20 @@ public sealed class BotSettings
     /// <summary>Optional. Sets <see cref="JoinMeetingParameters.Subject"/> so the participant can show a clearer name in the roster (Azure Bot display name is also used by Teams).</summary>
     public string? JoinMeetingSubject { get; init; }
 
-    /// <summary>If true, partial transcripts are broadcast to SignalR. Default false (finals only, less noise).</summary>
+    /// <summary>If true, partial transcripts are broadcast to SignalR. Default false (final-only, cleaner UI).</summary>
     public bool TranscriptBroadcastPartials { get; init; }
+
+    /// <summary>PCM coalescing window per chunk sent to AWS Transcribe (50–200 ms typical). Lower = lower latency.</summary>
+    public int TranscribeAudioChunkMilliseconds { get; init; } = 100;
+
+    /// <summary>Minimum milliseconds between partial transcript UI updates per participant (reduces flicker).</summary>
+    public int TranscribePartialMinIntervalMilliseconds { get; init; } = 90;
+
+    /// <summary>Optional merge window when multiplexing multiple participants into one timeline (milliseconds).</summary>
+    public int TranscriptTimelineMergeMilliseconds { get; init; } = 20;
+
+    /// <summary>Optional ALB endpoint that receives 3-minute transcript JSON payloads.</summary>
+    public string? TranscriptAlbEndpoint { get; init; }
 }
 
 public sealed class BotService

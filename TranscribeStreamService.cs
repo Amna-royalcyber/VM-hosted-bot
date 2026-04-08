@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using Amazon;
 using Amazon.TranscribeStreaming;
 using Amazon.TranscribeStreaming.Model;
@@ -13,7 +14,7 @@ public sealed record ParticipantIdentity(string UserId, string DisplayName);
 /// </summary>
 public sealed class TranscribeStreamService : IAsyncDisposable
 {
-    private readonly AmazonTranscribeStreamingClient _client;
+    private readonly BotSettings _settings;
     private readonly TranscriptAggregator _aggregator;
     private readonly ILogger<TranscribeStreamService> _logger;
     private readonly bool _broadcastPartials;
@@ -21,12 +22,16 @@ public sealed class TranscribeStreamService : IAsyncDisposable
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _cts = new();
     private readonly object _participantLock = new();
+    private readonly object _runLock = new();
 
     private ParticipantIdentity _participant;
     private Task? _sessionTask;
-    private string? _lastFinalTranscript;
+    private string? _lastFinalDedupeKey;
     private string? _lastPartialTranscript;
     private DateTime _lastPartialSentAtUtc = DateTime.MinValue;
+
+    private DateTime _lastRealAudioUtc;
+    private Timer? _silenceKeepAliveTimer;
 
     public TranscribeStreamService(
         BotSettings settings,
@@ -34,11 +39,12 @@ public sealed class TranscribeStreamService : IAsyncDisposable
         ParticipantIdentity participant,
         ILogger<TranscribeStreamService> logger)
     {
+        _settings = settings;
         _aggregator = aggregator;
         _participant = participant;
         _logger = logger;
         _broadcastPartials = settings.TranscriptBroadcastPartials;
-        _client = new AmazonTranscribeStreamingClient(RegionEndpoint.GetBySystemName(settings.AwsRegion));
+        _lastRealAudioUtc = DateTime.UtcNow;
     }
 
     public void UpdateParticipant(ParticipantIdentity participant)
@@ -51,12 +57,25 @@ public sealed class TranscribeStreamService : IAsyncDisposable
 
     public Task EnsureStartedAsync()
     {
-        if (_sessionTask is not null)
+        lock (_runLock)
         {
-            return Task.CompletedTask;
+            if (_sessionTask is not null && !_sessionTask.IsCompleted)
+            {
+                return Task.CompletedTask;
+            }
+
+            _sessionTask = RunSessionLoopAsync();
+
+            if (_silenceKeepAliveTimer is null)
+            {
+                _silenceKeepAliveTimer = new Timer(
+                    EnqueueSilenceKeepAliveIfNeeded,
+                    null,
+                    dueTime: TimeSpan.FromSeconds(4),
+                    period: TimeSpan.FromSeconds(4));
+            }
         }
 
-        _sessionTask = RunSessionAsync();
         return Task.CompletedTask;
     }
 
@@ -67,45 +86,89 @@ public sealed class TranscribeStreamService : IAsyncDisposable
             return;
         }
 
+        _lastRealAudioUtc = DateTime.UtcNow;
         _audioQueue.Enqueue((pcm16kMono, timestamp));
         _signal.Release();
     }
 
-    private async Task RunSessionAsync()
+    private void EnqueueSilenceKeepAliveIfNeeded(object? _)
     {
-        var req = new StartStreamTranscriptionRequest
+        if (_cts.IsCancellationRequested)
         {
-            LanguageCode = LanguageCode.EnUS,
-            MediaEncoding = MediaEncoding.Pcm,
-            MediaSampleRateHertz = 16000,
-            ShowSpeakerLabel = false,
-            EnablePartialResultsStabilization = true,
-            PartialResultsStability = PartialResultsStability.High,
-            AudioStreamPublisher = GetNextAudioEventAsync
-        };
+            return;
+        }
 
         try
         {
-            using var res = await _client.StartStreamTranscriptionAsync(req, _cts.Token);
-            var stream = res.TranscriptResultStream;
-            stream.TranscriptEventReceived += (_, e) =>
+            if ((DateTime.UtcNow - _lastRealAudioUtc).TotalSeconds < 3.5)
             {
-                if (e.EventStreamEvent is TranscriptEvent te)
-                {
-                    _ = HandleTranscriptAsync(te);
-                }
+                return;
+            }
+
+            var chunkMs = Math.Clamp(_settings.TranscribeAudioChunkMilliseconds, 50, 500);
+            var bytes = 16_000 * 2 * chunkMs / 1000;
+            _audioQueue.Enqueue((new byte[bytes], 0L));
+            _signal.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task RunSessionLoopAsync()
+    {
+        var attempt = 0;
+        while (!_cts.IsCancellationRequested)
+        {
+            attempt++;
+            using var client = new AmazonTranscribeStreamingClient(RegionEndpoint.GetBySystemName(_settings.AwsRegion));
+            var req = new StartStreamTranscriptionRequest
+            {
+                LanguageCode = LanguageCode.EnUS,
+                MediaEncoding = MediaEncoding.Pcm,
+                MediaSampleRateHertz = 16000,
+                ShowSpeakerLabel = false,
+                EnablePartialResultsStabilization = true,
+                PartialResultsStability = PartialResultsStability.Medium,
+                AudioStreamPublisher = GetNextAudioEventAsync
             };
 
-            stream.StartProcessing();
-            await Task.Delay(Timeout.Infinite, _cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // expected on dispose
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Per-participant Transcribe stream failed for {UserId}.", _participant.UserId);
+            try
+            {
+                using var res = await client.StartStreamTranscriptionAsync(req, _cts.Token);
+                var stream = res.TranscriptResultStream;
+                stream.ExceptionReceived += (_, ev) =>
+                {
+                    _logger.LogError(ev.EventStreamException, "Transcribe result stream exception for {UserId}.", _participant.UserId);
+                };
+                stream.TranscriptEventReceived += (_, e) =>
+                {
+                    if (e.EventStreamEvent is TranscriptEvent te)
+                    {
+                        _ = HandleTranscriptAsync(te);
+                    }
+                };
+
+                stream.StartProcessing();
+                await Task.Delay(Timeout.Infinite, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Per-participant Transcribe stream failed for {UserId}; retrying.", _participant.UserId);
+                try
+                {
+                    await Task.Delay(Math.Min(5000, 250 * attempt), _cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
         }
     }
 
@@ -148,7 +211,8 @@ public sealed class TranscribeStreamService : IAsyncDisposable
                     continue;
                 }
 
-                if ((now - _lastPartialSentAtUtc).TotalMilliseconds < 250)
+                var minGap = Math.Clamp(_settings.TranscribePartialMinIntervalMilliseconds, 30, 500);
+                if ((now - _lastPartialSentAtUtc).TotalMilliseconds < minGap)
                 {
                     continue;
                 }
@@ -164,11 +228,17 @@ public sealed class TranscribeStreamService : IAsyncDisposable
                 continue;
             }
 
-            if (string.Equals(_lastFinalTranscript, text, StringComparison.Ordinal))
+            var start = (double)(result.StartTime ?? 0);
+            var end = (double)(result.EndTime ?? 0);
+            var dedupeKey =
+                start.ToString("F6", CultureInfo.InvariantCulture) + "|" +
+                end.ToString("F6", CultureInfo.InvariantCulture) + "|" + text;
+            if (string.Equals(_lastFinalDedupeKey, dedupeKey, StringComparison.Ordinal))
             {
                 continue;
             }
-            _lastFinalTranscript = text;
+
+            _lastFinalDedupeKey = dedupeKey;
 
             await _aggregator.PublishAsync(new TranscriptFragment(
                 AudioTimestamp: (long)((result.StartTime ?? 0) * 10_000_000),
@@ -181,7 +251,8 @@ public sealed class TranscribeStreamService : IAsyncDisposable
 
     private async Task<IAudioStreamEvent> GetNextAudioEventAsync()
     {
-        const int targetChunkBytes = 16_000 * 2 * 320 / 1000;
+        var chunkMs = Math.Clamp(_settings.TranscribeAudioChunkMilliseconds, 50, 500);
+        var targetChunkBytes = 16_000 * 2 * chunkMs / 1000;
         var merged = new List<byte>(targetChunkBytes);
 
         while (merged.Count < targetChunkBytes && !_cts.IsCancellationRequested)
@@ -210,6 +281,8 @@ public sealed class TranscribeStreamService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _silenceKeepAliveTimer?.Dispose();
+        _silenceKeepAliveTimer = null;
         _cts.Cancel();
         if (_sessionTask is not null)
         {
@@ -218,6 +291,5 @@ public sealed class TranscribeStreamService : IAsyncDisposable
 
         _signal.Dispose();
         _cts.Dispose();
-        _client.Dispose();
     }
 }
