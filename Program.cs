@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,7 +37,12 @@ public static class Program
             options.KnownProxies.Clear();
         });
 
-        builder.Services.AddSignalR();
+        builder.Services.AddSignalR().AddJsonProtocol(options =>
+        {
+            // Ensure browser clients receive camelCase (kind, text, speakerLabel, azureAdObjectId).
+            options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+            options.PayloadSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        });
         builder.Services.AddSingleton(new BotSettings
         {
             TenantId = GetConfig(builder.Configuration, "BOT_TENANT_ID", "AzureAd:TenantId"),
@@ -56,18 +63,24 @@ public static class Program
             TranscribeAudioChunkMilliseconds = ReadInt(builder.Configuration, "BOT_TRANSCRIBE_CHUNK_MS", "Bot:TranscribeAudioChunkMilliseconds", 100),
             TranscribePartialMinIntervalMilliseconds = ReadInt(builder.Configuration, "BOT_TRANSCRIBE_PARTIAL_MS", "Bot:TranscribePartialMinIntervalMilliseconds", 90),
             TranscriptTimelineMergeMilliseconds = ReadInt(builder.Configuration, "BOT_TRANSCRIPT_TIMELINE_MS", "Bot:TranscriptTimelineMergeMilliseconds", 20),
-            TranscriptAlbEndpoint = ReadOptional(builder.Configuration, "BOT_TRANSCRIPT_ALB_ENDPOINT", "Bot:TranscriptAlbEndpoint")
+            TranscriptAlbEndpoint = ReadOptional(builder.Configuration, "BOT_TRANSCRIPT_ALB_ENDPOINT", "Bot:TranscriptAlbEndpoint"),
+            MsiToRosterJoinOrderFallback = ReadBool(builder.Configuration, "BOT_MSI_ROSTER_JOIN_ORDER_FALLBACK", "Bot:MsiToRosterJoinOrderFallback", defaultValue: true)
         });
 
-        builder.Services.AddHttpClient("AlbTranscriptSender");
+        builder.Services.AddHttpClient("AlbTranscriptSender", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(15);
+        });
         builder.Services.AddSingleton<MeetingContextStore>();
-        builder.Services.AddSingleton<TranscriptAlbSender>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptAlbSender>());
+        builder.Services.AddSingleton<ParticipantManager>();
+        builder.Services.AddSingleton<TranscriptionChunkManager>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptionChunkManager>());
         builder.Services.AddSingleton<TranscriptBroadcaster>();
         builder.Services.AddSingleton<TranscriptAggregator>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptAggregator>());
         builder.Services.AddSingleton<EntraUserResolver>();
         builder.Services.AddSingleton<MeetingParticipantService>();
+        builder.Services.AddSingleton<TranscriptIdentityResolver>();
         builder.Services.AddSingleton<TranscriptionManager>();
         builder.Services.AddSingleton<ParticipantAudioStreamHandler>();
         builder.Services.AddSingleton<ParticipantAudioRouter>();
