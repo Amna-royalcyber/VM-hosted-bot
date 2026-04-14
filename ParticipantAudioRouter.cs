@@ -29,6 +29,7 @@ public sealed class ParticipantAudioRouter
     private int _loggedMixedMode;
     private int _loggedDominantNotYetMixed;
     private int _loggedMultiParticipantInferenceSkipped;
+    private int _loggedUnknownMixedFallback;
 
     private readonly object _inferLock = new();
 
@@ -127,7 +128,8 @@ public sealed class ParticipantAudioRouter
             {
                 if (!TryApplyRosterMediaStreamMap(sourceId, out participantId, out displayName))
                 {
-                    if (!TryInferBindingForUnmappedSource(sourceId, out participantId, out displayName))
+                    var roster = _meetingParticipants.GetRosterSnapshot();
+                    if (!TryInferBindingForUnmappedSource(sourceId, roster, out participantId, out displayName))
                     {
                         LogUnmappedSourceIdOnce(sourceId);
                         continue;
@@ -199,10 +201,13 @@ public sealed class ParticipantAudioRouter
                 out var mixedDisplayName,
                 out var mixedUserIdWhenNoStream))
         {
-            _logger.LogWarning("No attribution available — sending mixed audio with UNKNOWN speaker.");
             mixedSourceId = null;
             mixedDisplayName = "Speaker";
             mixedUserIdWhenNoStream = null;
+            if (Interlocked.Increment(ref _loggedUnknownMixedFallback) == 1)
+            {
+                _logger.LogWarning("No authoritative attribution available — sending mixed audio with UNKNOWN speaker.");
+            }
         }
 
         if (Interlocked.Increment(ref _loggedMixedMode) == 1)
@@ -288,10 +293,11 @@ public sealed class ParticipantAudioRouter
 
     /// <summary>
     /// When Graph has not yet correlated <c>mediaStreams[].sourceId</c> to a user, create a per-MSI placeholder only.
-    /// Entra identity is applied later via Graph/roster — never via roster join order.
+    /// Entra identity is applied later via authoritative Graph/roster mediaStreams mapping only.
     /// </summary>
     private bool TryInferBindingForUnmappedSource(
         uint sourceId,
+        IReadOnlyList<RosterParticipantDto> roster,
         out string participantId,
         out string displayName)
     {
@@ -307,7 +313,7 @@ public sealed class ParticipantAudioRouter
             if (Interlocked.Increment(ref _loggedMultiParticipantInferenceSkipped) == 1)
             {
                 _logger.LogInformation(
-                    "Graph has not mapped mediaStreams for some streams yet; using per-MSI placeholders until Graph provides sourceId → user (no roster-order guessing).");
+                    "Graph has not mapped mediaStreams for some streams yet; using per-MSI placeholders until authoritative sourceId → user mapping arrives.");
             }
 
             _participantManager.TryBindAudioSource(sourceId, null, string.Empty, "SyntheticUntilGraph");

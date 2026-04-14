@@ -50,8 +50,30 @@ public sealed class TranscriptIdentityResolver
     {
         var dn = displayNameFallback?.Trim() ?? "";
 
+        if (_participantManager.TryResolveUserFromAudioStream(sourceId, out var mappedUserId))
+        {
+            var canonicalName = _participantManager.GetCanonicalDisplayName(mappedUserId);
+            var resolvedName = !string.IsNullOrWhiteSpace(canonicalName)
+                ? canonicalName
+                : (string.IsNullOrWhiteSpace(dn) ? $"Unresolved Speaker ({sourceId})" : dn);
+            return (mappedUserId, resolvedName);
+        }
+
         if (_participantManager.TryGetBinding(sourceId, out var binding) && binding is not null)
         {
+            // Late Graph/mediaStreams backfill: if we already have a placeholder binding, upgrade it
+            // from MeetingParticipantService's sourceId->Entra correlation when available.
+            if (string.IsNullOrWhiteSpace(binding.EntraOid) &&
+                _meetingParticipants.TryResolveAudioSourceToEntra(sourceId, out var lateOid, out var lateName))
+            {
+                _participantManager.TryBindAudioSource(sourceId, lateOid, lateName, "RosterMediaStreamsMap");
+                _participantManager.TryGetBinding(sourceId, out binding);
+                if (binding is null)
+                {
+                    return (ParticipantManager.SyntheticParticipantId(sourceId), string.IsNullOrWhiteSpace(dn) ? $"Unresolved Speaker ({sourceId})" : dn);
+                }
+            }
+
             var uid = !string.IsNullOrWhiteSpace(binding.EntraOid)
                 ? binding.EntraOid.Trim()
                 : ParticipantManager.SyntheticParticipantId(sourceId);
@@ -59,7 +81,7 @@ public sealed class TranscriptIdentityResolver
             var name = _participantManager.GetTranscriptSpeakerLabel(sourceId);
             if (string.IsNullOrWhiteSpace(name))
             {
-                name = dn;
+                name = string.IsNullOrWhiteSpace(dn) ? $"Unresolved Speaker ({sourceId})" : dn;
             }
 
             return (uid, name);
@@ -67,10 +89,16 @@ public sealed class TranscriptIdentityResolver
 
         if (_meetingParticipants.TryResolveAudioSourceToEntra(sourceId, out var entraOid, out var rosterName))
         {
+            _participantManager.TryBindAudioSource(sourceId, entraOid, rosterName, "RosterMediaStreamsMap");
             return (entraOid, rosterName);
         }
 
-        return (ParticipantManager.SyntheticParticipantId(sourceId), _participantManager.GetCanonicalDisplayName(ParticipantManager.SyntheticParticipantId(sourceId)) ?? dn);
+        var fallbackName = _participantManager.GetCanonicalDisplayName(ParticipantManager.SyntheticParticipantId(sourceId));
+        if (string.IsNullOrWhiteSpace(fallbackName))
+        {
+            fallbackName = string.IsNullOrWhiteSpace(dn) ? $"Unresolved Speaker ({sourceId})" : dn;
+        }
+        return (ParticipantManager.SyntheticParticipantId(sourceId), fallbackName);
     }
 
     private static bool TryParseSyntheticSourceId(string uid, out uint sourceId)

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -36,6 +37,15 @@ public sealed class ParticipantBinding
 
     /// <summary>True when Graph has confirmed <see cref="EntraOid"/> (or equivalent authoritative bind).</summary>
     public bool IsFinal { get; set; }
+
+    public IdentityState State { get; set; } = IdentityState.Pending;
+}
+
+public enum IdentityState
+{
+    Pending,
+    PartiallyResolved,
+    Resolved
 }
 
 /// <summary>
@@ -58,6 +68,10 @@ public sealed class ParticipantManager
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly ConcurrentDictionary<uint, ParticipantBinding> _bindings = new();
+    private readonly ConcurrentDictionary<string, string> _sessionUserToSpeakerMap = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<uint, string> _audioStreamToUserMap = new();
+    private readonly ConcurrentDictionary<string, uint> _identityToSourceId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<uint, int> _sourceIdToSpeakerIndex = new();
 
     private string _meetingKey = string.Empty;
 
@@ -75,6 +89,10 @@ public sealed class ParticipantManager
             _meetingKey = string.IsNullOrWhiteSpace(callOrMeetingId) ? Guid.NewGuid().ToString("N") : callOrMeetingId.Trim();
             _participants.Clear();
             _bindings.Clear();
+            _sessionUserToSpeakerMap.Clear();
+            _audioStreamToUserMap.Clear();
+            _identityToSourceId.Clear();
+            _sourceIdToSpeakerIndex.Clear();
             Interlocked.Exchange(ref _speakerCounter, 0);
             _logger.LogInformation("ParticipantManager reset for meeting key {MeetingKey}.", _meetingKey);
         }
@@ -84,6 +102,46 @@ public sealed class ParticipantManager
 
     public bool TryGetBinding(uint sourceId, out ParticipantBinding? binding) =>
         _bindings.TryGetValue(sourceId, out binding);
+
+    public IReadOnlyList<uint> GetUnresolvedSourceIds() =>
+        _bindings
+            .Where(kvp => kvp.Value.State != IdentityState.Resolved)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+    public bool TryGetSourceIdForIdentity(string entraOid, out uint sourceId)
+    {
+        sourceId = 0;
+        if (string.IsNullOrWhiteSpace(entraOid))
+        {
+            return false;
+        }
+
+        return _identityToSourceId.TryGetValue(entraOid.Trim(), out sourceId);
+    }
+
+    public bool TryResolveUserFromAudioStream(uint sourceId, out string userId)
+    {
+        userId = string.Empty;
+        if (_audioStreamToUserMap.TryGetValue(sourceId, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
+        {
+            userId = mapped.Trim();
+            return true;
+        }
+
+        if (_bindings.TryGetValue(sourceId, out var b) && !string.IsNullOrWhiteSpace(b.EntraOid))
+        {
+            userId = b.EntraOid.Trim();
+            return true;
+        }
+
+        return false;
+    }
+
+    public string? TryGetSpeakerIdForUser(string userId) =>
+        string.IsNullOrWhiteSpace(userId)
+            ? null
+            : (_sessionUserToSpeakerMap.TryGetValue(userId.Trim(), out var sid) ? sid : null);
 
     /// <summary>
     /// Human-facing transcript label: <b>always</b> prefers Entra/Graph display name when <see cref="ParticipantBinding.EntraOid"/> is set;
@@ -109,7 +167,7 @@ public sealed class ParticipantManager
                 return b.DisplayName.Trim();
             }
         }
-        else if (!string.IsNullOrWhiteSpace(b.DisplayName))
+        else if (b.State == IdentityState.Resolved && !string.IsNullOrWhiteSpace(b.DisplayName))
         {
             return b.DisplayName.Trim();
         }
@@ -164,7 +222,7 @@ public sealed class ParticipantManager
         return uint.TryParse(suffix, out sourceId);
     }
 
-    /// <summary>Register a human participant from Graph roster (display cache).</summary>
+    /// <summary>Register a human participant from Graph roster (display cache only; no speaker assignment).</summary>
     public void RegisterParticipant(string participantId, string displayName, DateTime joinTimestampUtc)
     {
         if (string.IsNullOrWhiteSpace(participantId))
@@ -174,7 +232,6 @@ public sealed class ParticipantManager
 
         displayName = string.IsNullOrWhiteSpace(displayName) ? participantId.Trim() : displayName.Trim();
         var pid = participantId.Trim();
-
         _participants.AddOrUpdate(
             pid,
             _ => new ParticipantInfo
@@ -184,7 +241,13 @@ public sealed class ParticipantManager
                 JoinTimestampUtc = joinTimestampUtc,
                 AudioStreamId = null
             },
-            (_, existing) => existing);
+            (_, existing) => new ParticipantInfo
+            {
+                ParticipantId = existing.ParticipantId,
+                DisplayName = displayName,
+                JoinTimestampUtc = existing.JoinTimestampUtc,
+                AudioStreamId = existing.AudioStreamId
+            });
     }
 
     /// <summary>
@@ -225,8 +288,29 @@ public sealed class ParticipantManager
 
                 if (!string.IsNullOrWhiteSpace(incomingOid))
                 {
+                    if (_identityToSourceId.TryGetValue(incomingOid, out var existingSourceForIdentity) &&
+                        existingSourceForIdentity != sourceId)
+                    {
+                        _logger.LogWarning(
+                            "Ignoring late mapping sourceId {SourceId} -> {EntraOid}; identity already bound to sourceId {ExistingSourceId}.",
+                            sourceId,
+                            incomingOid,
+                            existingSourceForIdentity);
+                        return null;
+                    }
+
                     existing.EntraOid = incomingOid;
                     existing.IsFinal = true;
+                    existing.State = IdentityState.Resolved;
+                    var speakerId = GetOrCreateSpeakerIdForUser(incomingOid);
+                    existing.StableSpeakerLabel = speakerId;
+                    _audioStreamToUserMap[sourceId] = incomingOid;
+                    _identityToSourceId[incomingOid] = sourceId;
+                    if (_sessionUserToSpeakerMap.TryGetValue(incomingOid, out var speakerText) &&
+                        TryParseSpeakerIndex(speakerText, out var speakerIndex))
+                    {
+                        _sourceIdToSpeakerIndex[sourceId] = speakerIndex;
+                    }
                 }
 
                 if (!string.IsNullOrWhiteSpace(inputDisplayName))
@@ -257,12 +341,13 @@ public sealed class ParticipantManager
 
         // First bind only — hard block reassignment is implicit (key did not exist).
         var streamPid = SyntheticParticipantId(sourceId);
-        var stableLabel = $"Speaker {Interlocked.Increment(ref _speakerCounter)}";
+        var stableLabel = $"Unresolved Speaker ({sourceId})";
         var binding = new ParticipantBinding
         {
             SourceId = sourceId,
             StreamParticipantId = streamPid,
-            StableSpeakerLabel = stableLabel
+            StableSpeakerLabel = stableLabel,
+            State = IdentityState.PartiallyResolved
         };
 
         var initialGraphOid = string.IsNullOrWhiteSpace(participantIdOrEntraFromGraph)
@@ -271,17 +356,27 @@ public sealed class ParticipantManager
         if (graphOrAuthoritative && !string.IsNullOrWhiteSpace(initialGraphOid))
         {
             binding.EntraOid = initialGraphOid;
-            binding.DisplayName = !string.IsNullOrWhiteSpace(inputDisplayName) ? inputDisplayName : stableLabel;
+            var speakerId = GetOrCreateSpeakerIdForUser(initialGraphOid);
+            binding.StableSpeakerLabel = speakerId;
+            binding.DisplayName = !string.IsNullOrWhiteSpace(inputDisplayName) ? inputDisplayName : binding.StableSpeakerLabel;
             RegisterParticipant(binding.EntraOid, binding.DisplayName, DateTime.UtcNow);
             binding.IsFinal = true;
+            binding.State = IdentityState.Resolved;
+            _audioStreamToUserMap[sourceId] = initialGraphOid;
+            _identityToSourceId[initialGraphOid] = sourceId;
+            if (_sessionUserToSpeakerMap.TryGetValue(initialGraphOid, out var speakerText) &&
+                TryParseSpeakerIndex(speakerText, out var speakerIndex))
+            {
+                _sourceIdToSpeakerIndex[sourceId] = speakerIndex;
+            }
         }
         else
         {
             binding.IsFinal = false;
+            binding.State = IdentityState.PartiallyResolved;
             binding.DisplayName = stableLabel;
         }
 
-        RegisterParticipant(streamPid, binding.DisplayName, DateTime.UtcNow);
         _bindings[sourceId] = binding;
 
         _logger.LogInformation(
@@ -293,6 +388,33 @@ public sealed class ParticipantManager
             reason);
 
         return null;
+    }
+
+    private string GetOrCreateSpeakerIdForUser(string userId)
+    {
+        var uid = userId.Trim();
+        return _sessionUserToSpeakerMap.GetOrAdd(uid, _ =>
+        {
+            var speakerId = $"Speaker {Interlocked.Increment(ref _speakerCounter)}";
+            return speakerId;
+        });
+    }
+
+    private static bool TryParseSpeakerIndex(string? speakerId, out int speakerIndex)
+    {
+        speakerIndex = 0;
+        if (string.IsNullOrWhiteSpace(speakerId))
+        {
+            return false;
+        }
+
+        const string prefix = "Speaker ";
+        if (!speakerId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return int.TryParse(speakerId[prefix.Length..], out speakerIndex);
     }
 
     public bool TryResolveAudioSource(uint sourceId, out string participantId, out string displayName)
