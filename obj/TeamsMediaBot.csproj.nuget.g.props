@@ -14,11 +14,9 @@
   </ItemGroup>
   <ImportGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
     <Import Project="$(NuGetPackageRoot)microsoft.extensions.configuration.usersecrets\10.0.5\buildTransitive\net8.0\Microsoft.Extensions.Configuration.UserSecrets.props" Condition="Exists('$(NuGetPackageRoot)microsoft.extensions.configuration.usersecrets\10.0.5\buildTransitive\net8.0\Microsoft.Extensions.Configuration.UserSecrets.props')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.cognitiveservices.speech\1.40.0\build\Microsoft.CognitiveServices.Speech.props" Condition="Exists('$(NuGetPackageRoot)microsoft.cognitiveservices.speech\1.40.0\build\Microsoft.CognitiveServices.Speech.props')" />
   </ImportGroup>
   <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
     <PkgMicrosoft_Skype_Bots_Media Condition=" '$(PkgMicrosoft_Skype_Bots_Media)' == '' ">C:\Users\AmnaZahid\.nuget\packages\microsoft.skype.bots.media\1.31.0.225-preview</PkgMicrosoft_Skype_Bots_Media>
-    <PkgAWSSDK_Core Condition=" '$(PkgAWSSDK_Core)' == '' ">C:\Users\AmnaZahid\.nuget\packages\awssdk.core\4.0.3.25</PkgAWSSDK_Core>
-    <PkgAWSSDK_TranscribeStreaming Condition=" '$(PkgAWSSDK_TranscribeStreaming)' == '' ">C:\Users\AmnaZahid\.nuget\packages\awssdk.transcribestreaming\4.0.6.6</PkgAWSSDK_TranscribeStreaming>
-    <PkgAWSSDK_TranscribeService Condition=" '$(PkgAWSSDK_TranscribeService)' == '' ">C:\Users\AmnaZahid\.nuget\packages\awssdk.transcribeservice\4.0.5.10</PkgAWSSDK_TranscribeService>
   </PropertyGroup>
 </Project>
