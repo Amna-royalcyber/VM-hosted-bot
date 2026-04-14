@@ -15,10 +15,10 @@ public sealed class TranscriptionManager : IAsyncDisposable
     private readonly TranscriptAggregator _aggregator;
     private readonly MeetingParticipantService _meetingParticipants;
     private readonly ParticipantManager _participantManager;
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<TranscribeStreamService> _streamLogger;
     private readonly ILogger<TranscriptionManager> _logger;
     private readonly ConcurrentDictionary<uint, TranscribeStreamService> _streamsBySourceId = new();
-    private readonly ConcurrentDictionary<uint, ParticipantIdentity> _participantBySourceId = new();
+    private readonly ConcurrentDictionary<uint, TranscribeParticipantSnapshot> _participantBySourceId = new();
     private readonly ConcurrentDictionary<string, List<uint>> _sourceIdsByUserId = new(StringComparer.OrdinalIgnoreCase);
     private ICall? _attachedCall;
     private string? _botClientId;
@@ -28,14 +28,14 @@ public sealed class TranscriptionManager : IAsyncDisposable
         TranscriptAggregator aggregator,
         MeetingParticipantService meetingParticipants,
         ParticipantManager participantManager,
-        ILoggerFactory loggerFactory,
+        ILogger<TranscribeStreamService> streamLogger,
         ILogger<TranscriptionManager> logger)
     {
         _settings = settings;
         _aggregator = aggregator;
         _meetingParticipants = meetingParticipants;
         _participantManager = participantManager;
-        _loggerFactory = loggerFactory;
+        _streamLogger = streamLogger;
         _logger = logger;
     }
 
@@ -79,7 +79,7 @@ public sealed class TranscriptionManager : IAsyncDisposable
                 label = "Unknown";
             }
 
-            var syn = new ParticipantIdentity(syntheticId, label);
+            var syn = new TranscribeParticipantSnapshot(syntheticId, label);
             if (_participantBySourceId.TryAdd(sourceId, syn))
             {
                 participant = syn;
@@ -101,7 +101,7 @@ public sealed class TranscriptionManager : IAsyncDisposable
                 _aggregator,
                 sourceId,
                 participant,
-                _loggerFactory.CreateLogger<TranscribeStreamService>());
+                _streamLogger);
             return s;
         });
 
@@ -133,7 +133,7 @@ public sealed class TranscriptionManager : IAsyncDisposable
             displayName = userId;
         }
 
-        var identityRecord = new ParticipantIdentity(userId.Trim(), displayName.Trim());
+        var identityRecord = new TranscribeParticipantSnapshot(userId.Trim(), displayName.Trim());
         var sourceIds = TryExtractSourceIds(resource);
         if (sourceIds.Count == 0)
         {

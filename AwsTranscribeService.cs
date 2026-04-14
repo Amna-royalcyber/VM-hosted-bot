@@ -20,23 +20,21 @@ public sealed class AwsTranscribeService : IAsyncDisposable
     private readonly BotSettings _settings;
     private readonly TranscriptAggregator _transcriptAggregator;
     private readonly ParticipantManager _participantManager;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AwsTranscribeService> _logger;
     private readonly ConcurrentDictionary<uint, ParticipantTranscribeSession> _sessionsBySourceId = new();
     private readonly object _mixedLock = new();
     private ParticipantTranscribeSession? _mixedDominantSession;
+    private volatile bool _isDisposing;
 
     public AwsTranscribeService(
         BotSettings settings,
         TranscriptAggregator transcriptAggregator,
         ParticipantManager participantManager,
-        ILoggerFactory loggerFactory,
         ILogger<AwsTranscribeService> logger)
     {
         _settings = settings;
         _transcriptAggregator = transcriptAggregator;
         _participantManager = participantManager;
-        _loggerFactory = loggerFactory;
         _logger = logger;
     }
 
@@ -53,7 +51,7 @@ public sealed class AwsTranscribeService : IAsyncDisposable
 
     public async Task SendAudioChunkAsync(uint sourceId, string displayName, byte[] pcmAudio, long timestamp)
     {
-        if (pcmAudio.Length == 0)
+        if (_isDisposing || pcmAudio.Length == 0)
         {
             return;
         }
@@ -65,7 +63,7 @@ public sealed class AwsTranscribeService : IAsyncDisposable
                 fixedSourceStreamId: sourceId,
                 _transcriptAggregator,
                 _participantManager,
-                _loggerFactory.CreateLogger<ParticipantTranscribeSession>()));
+                _logger));
 
         await session.EnsureStartedAsync();
         session.EnqueueAudio(pcmAudio, timestamp);
@@ -82,7 +80,7 @@ public sealed class AwsTranscribeService : IAsyncDisposable
         byte[] pcmAudio,
         long timestamp)
     {
-        if (pcmAudio.Length == 0)
+        if (_isDisposing || pcmAudio.Length == 0)
         {
             return;
         }
@@ -96,7 +94,7 @@ public sealed class AwsTranscribeService : IAsyncDisposable
                     fixedSourceStreamId: null,
                     _transcriptAggregator,
                     _participantManager,
-                    _loggerFactory.CreateLogger<ParticipantTranscribeSession>());
+                    _logger);
             }
 
             _mixedDominantSession.UpdateMixedDominantContext(sourceStreamId, displayName, userIdWhenNoSourceStream);
@@ -109,6 +107,7 @@ public sealed class AwsTranscribeService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _isDisposing = true;
         foreach (var session in _sessionsBySourceId.Values)
         {
             await session.DisposeAsync();
@@ -129,7 +128,7 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
     private readonly BotSettings _settings;
     private readonly TranscriptAggregator _transcriptAggregator;
     private readonly ParticipantManager _participantManager;
-    private readonly ILogger<ParticipantTranscribeSession> _logger;
+    private readonly ILogger _logger;
     private readonly bool _broadcastPartials;
 
     /// <summary>When set, all transcripts for this AWS stream belong to this MSI.</summary>
@@ -156,13 +155,14 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
     private uint? _mixedActiveSourceId;
     private string _mixedDisplayName = "";
     private string? _mixedFallbackUserId;
+    private volatile bool _isDisposing;
 
     public ParticipantTranscribeSession(
         BotSettings settings,
         uint? fixedSourceStreamId,
         TranscriptAggregator transcriptAggregator,
         ParticipantManager participantManager,
-        ILogger<ParticipantTranscribeSession> logger)
+        ILogger logger)
     {
         _settings = settings;
         _fixedSourceStreamId = fixedSourceStreamId;
@@ -183,7 +183,7 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
         lock (_stateLock)
         {
             _mixedActiveSourceId = sourceStreamId;
-            _mixedDisplayName = string.IsNullOrWhiteSpace(displayName) ? "Speaker" : displayName.Trim();
+            _mixedDisplayName = string.IsNullOrWhiteSpace(displayName) ? string.Empty : displayName.Trim();
             _mixedFallbackUserId = string.IsNullOrWhiteSpace(userIdWhenNoSourceStream)
                 ? null
                 : userIdWhenNoSourceStream.Trim();
@@ -289,6 +289,15 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
                 var resultStream = response.TranscriptResultStream;
                 resultStream.ExceptionReceived += (_, ev) =>
                 {
+                    if (ShouldSuppressStreamException(ev.EventStreamException))
+                    {
+                        _logger.LogDebug(
+                            "Transcribe stream closed during shutdown for session {SessionKey}: {Message}",
+                            SessionKeyForLogs,
+                            ev.EventStreamException?.Message);
+                        return;
+                    }
+
                     _logger.LogError(ev.EventStreamException, "Transcribe result stream exception for session {SessionKey}.", SessionKeyForLogs);
                 };
                 resultStream.TranscriptEventReceived += (_, e) =>
@@ -308,6 +317,14 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
             }
             catch (Exception ex)
             {
+                if (ShouldSuppressStreamException(ex))
+                {
+                    _logger.LogDebug(
+                        "Transcribe stream loop ended during shutdown for session {SessionKey}: {Message}",
+                        SessionKeyForLogs,
+                        ex.Message);
+                    return;
+                }
                 _logger.LogError(ex, "Transcribe stream ended for session {SessionKey}; will retry if call continues.", SessionKeyForLogs);
                 try
                 {
@@ -354,19 +371,19 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
                     displayName = _participantManager.GetTranscriptSpeakerLabel(sid);
                     if (string.IsNullOrWhiteSpace(displayName))
                     {
-                        displayName = _mixedDisplayName;
+                        displayName = string.Empty;
                     }
                 }
                 else if (_fixedSourceStreamId is null && _mixedFallbackUserId is not null)
                 {
                     userIdForBroadcast = _mixedFallbackUserId;
-                    displayName = string.IsNullOrWhiteSpace(_mixedDisplayName) ? "Speaker" : _mixedDisplayName;
+                    displayName = string.IsNullOrWhiteSpace(_mixedDisplayName) ? string.Empty : _mixedDisplayName.Trim();
                     sourceForFragment = null;
                 }
                 else
                 {
                     userIdForBroadcast = AwsTranscribeService.UnknownMixedUserId;
-                    displayName = string.IsNullOrWhiteSpace(_mixedDisplayName) ? "Speaker" : _mixedDisplayName;
+                    displayName = string.IsNullOrWhiteSpace(_mixedDisplayName) ? string.Empty : _mixedDisplayName.Trim();
                     sourceForFragment = null;
                 }
             }
@@ -476,6 +493,7 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _isDisposing = true;
         _silenceKeepAliveTimer?.Dispose();
         _silenceKeepAliveTimer = null;
         _cts.Cancel();
@@ -493,5 +511,67 @@ internal sealed class ParticipantTranscribeSession : IAsyncDisposable
 
         _cts.Dispose();
         _audioSignal.Dispose();
+    }
+
+    private bool ShouldSuppressStreamException(Exception? ex)
+    {
+        if (_isDisposing || _cts.IsCancellationRequested)
+        {
+            return true;
+        }
+
+        foreach (var e in EnumerateExceptionChain(ex))
+        {
+            if (e is OperationCanceledException || e is ObjectDisposedException)
+            {
+                return true;
+            }
+
+            if (e is IOException ioEx &&
+                ioEx.Message.Contains("request was aborted", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var msg = e.Message ?? string.Empty;
+            if (msg.Contains("request was aborted", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// AWS SDK often wraps <see cref="IOException"/> (aborted HTTP/2 read) in
+    /// <c>TranscribeStreamingEventStreamException</c> with a generic outer message, so suppression must walk the chain.
+    /// </summary>
+    private static IEnumerable<Exception> EnumerateExceptionChain(Exception? ex)
+    {
+        if (ex is null)
+        {
+            yield break;
+        }
+
+        yield return ex;
+
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.InnerExceptions)
+            {
+                foreach (var e in EnumerateExceptionChain(inner))
+                {
+                    yield return e;
+                }
+            }
+
+            yield break;
+        }
+
+        foreach (var e in EnumerateExceptionChain(ex.InnerException))
+        {
+            yield return e;
+        }
     }
 }

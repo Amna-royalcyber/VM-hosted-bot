@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace TeamsMediaBot;
@@ -51,7 +52,7 @@ public enum IdentityState
 /// <summary>
 /// Global registry: <b>sourceId is the single source of truth</b>. Bind once; only enrich metadata; never reassign a stream to another user.
 /// </summary>
-public sealed class ParticipantManager
+public sealed class ParticipantManager : IParticipantManager
 {
     public const string SyntheticIdPrefix = "msi-pending-";
 
@@ -62,6 +63,7 @@ public sealed class ParticipantManager
         participantId.StartsWith(SyntheticIdPrefix, StringComparison.OrdinalIgnoreCase);
 
     private readonly ILogger<ParticipantManager> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly object _lifecycleLock = new();
 
     private readonly ConcurrentDictionary<string, ParticipantInfo> _participants =
@@ -77,9 +79,10 @@ public sealed class ParticipantManager
 
     private int _speakerCounter;
 
-    public ParticipantManager(ILogger<ParticipantManager> logger)
+    public ParticipantManager(ILogger<ParticipantManager> logger, IServiceScopeFactory scopeFactory)
     {
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     public void BeginNewMeeting(string? callOrMeetingId)
@@ -259,7 +262,8 @@ public sealed class ParticipantManager
         var inputDisplayName = string.IsNullOrWhiteSpace(displayName) ? string.Empty : displayName.Trim();
         var graphOrAuthoritative =
             string.Equals(reason, "Graph", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(reason, "RosterMediaStreamsMap", StringComparison.OrdinalIgnoreCase);
+            string.Equals(reason, "RosterMediaStreamsMap", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(reason, "GraphBackfillRefresh", StringComparison.OrdinalIgnoreCase);
 
         if (_bindings.TryGetValue(sourceId, out var existing))
         {
@@ -328,6 +332,7 @@ public sealed class ParticipantManager
                         resolved);
                 }
 
+                ReflectIdentityStore(sourceId);
                 return null;
             }
 
@@ -341,12 +346,11 @@ public sealed class ParticipantManager
 
         // First bind only — hard block reassignment is implicit (key did not exist).
         var streamPid = SyntheticParticipantId(sourceId);
-        var stableLabel = $"Unresolved Speaker ({sourceId})";
         var binding = new ParticipantBinding
         {
             SourceId = sourceId,
             StreamParticipantId = streamPid,
-            StableSpeakerLabel = stableLabel,
+            StableSpeakerLabel = string.Empty,
             State = IdentityState.PartiallyResolved
         };
 
@@ -374,7 +378,7 @@ public sealed class ParticipantManager
         {
             binding.IsFinal = false;
             binding.State = IdentityState.PartiallyResolved;
-            binding.DisplayName = stableLabel;
+            binding.DisplayName = string.Empty;
         }
 
         _bindings[sourceId] = binding;
@@ -387,7 +391,20 @@ public sealed class ParticipantManager
             binding.IsFinal,
             reason);
 
+        ReflectIdentityStore(sourceId);
         return null;
+    }
+
+    private void ReflectIdentityStore(uint sourceId)
+    {
+        if (!_bindings.TryGetValue(sourceId, out var b) || b is null)
+        {
+            return;
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<SpeakerIdentityStore>();
+        store.OnParticipantBindingUpdated(b);
     }
 
     private string GetOrCreateSpeakerIdForUser(string userId)
