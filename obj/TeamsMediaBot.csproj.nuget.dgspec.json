@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj": {}
+    "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj": {}
   },
   "projects": {
-    "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj": {
+    "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
+        "projectUniqueName": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
         "projectName": "TeamsMediaBot",
-        "projectPath": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
+        "projectPath": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
         "packagesPath": "C:\\Users\\AmnaZahid\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\obj\\",
+        "outputPath": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\AmnaZahid\\AppData\\Roaming\\NuGet\\NuGet.Config"

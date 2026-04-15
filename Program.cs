@@ -86,10 +86,9 @@ public static class Program
         builder.Services.AddSingleton<IChunkManager>(sp => sp.GetRequiredService<TranscriptionChunkManager>());
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptionChunkManager>());
         builder.Services.AddSingleton<TranscriptBroadcaster>();
-        builder.Services.AddSingleton<SpeakerIdentityStore>();
+        builder.Services.AddSingleton<SsrcParticipantMapper>();
         builder.Services.AddSingleton<EntraUserResolver>();
         builder.Services.AddSingleton<MeetingParticipantService>();
-        builder.Services.AddHostedService<IdentityBackfillService>();
         builder.Services.AddSingleton<AzureSpeechTranscriptionService>();
         builder.Services.AddSingleton<ParticipantAudioRouter>();
         builder.Services.AddSingleton<AudioProcessor>();
@@ -213,6 +212,11 @@ public static class Program
                 log.LogWarning(ex, "Invalid join request.");
                 return Results.BadRequest(new { message = ex.Message });
             }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("already active", StringComparison.OrdinalIgnoreCase))
+            {
+                log.LogWarning(ex, "Join rejected: a call is already in progress.");
+                return Results.Conflict(new { message = ex.Message, transcriptKey });
+            }
             catch (Exception ex)
             {
                 log.LogError(ex, "Join meeting failed.");
@@ -262,6 +266,11 @@ public static class Program
             {
                 log.LogWarning(ex, "Invalid join request.");
                 return Results.BadRequest(new { message = ex.Message });
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("already active", StringComparison.OrdinalIgnoreCase))
+            {
+                log.LogWarning(ex, "Join rejected: a call is already in progress.");
+                return Results.Conflict(new { message = ex.Message });
             }
             catch (Exception ex)
             {

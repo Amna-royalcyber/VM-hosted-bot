@@ -6,20 +6,17 @@ namespace TeamsMediaBot;
 public sealed class TranscriptBroadcaster
 {
     private readonly IHubContext<TranscriptHub> _hubContext;
-    private readonly IParticipantManager _participantManager;
     private readonly ILogger<TranscriptBroadcaster> _logger;
 
     public TranscriptBroadcaster(
         IHubContext<TranscriptHub> hubContext,
-        IParticipantManager participantManager,
         ILogger<TranscriptBroadcaster> logger)
     {
         _hubContext = hubContext;
-        _participantManager = participantManager;
         _logger = logger;
     }
 
-    /// <summary>Identity-first final transcript from Azure Speech (per media stream id).</summary>
+    /// <summary>Forward final transcript as produced by the speech layer (identity already set upstream).</summary>
     public async Task BroadcastStructuredTranscriptAsync(
         string intraId,
         string participantId,
@@ -29,12 +26,6 @@ public sealed class TranscriptBroadcaster
         double? confidence,
         DateTime utteranceUtc)
     {
-        var resolvedParticipantId = _participantManager.GetEntraObjectIdForTranscriptPayload(participantId);
-        var entraForClients = !string.IsNullOrWhiteSpace(resolvedParticipantId) &&
-                              !ParticipantManager.IsSyntheticParticipantId(resolvedParticipantId)
-            ? resolvedParticipantId
-            : null;
-
         try
         {
             await _hubContext.Clients.All.SendAsync(
@@ -43,13 +34,15 @@ public sealed class TranscriptBroadcaster
                 {
                     kind = "Final",
                     intraId,
-                    participantId = entraForClients ?? participantId,
+                    participantId,
                     displayName,
+                    speakerLabel = displayName,
+                    sourceId = ssrc,
                     ssrc,
                     text,
                     confidence,
                     timestamp = new DateTimeOffset(utteranceUtc, TimeSpan.Zero),
-                    azureAdObjectId = entraForClients,
+                    azureAdObjectId = participantId,
                     tempLabel = false
                 });
         }
@@ -59,17 +52,9 @@ public sealed class TranscriptBroadcaster
         }
     }
 
-    /// <summary>Clients should patch prior lines for <paramref name="sourceId"/> when display name / Entra resolves.</summary>
+    /// <summary>Optional UI hint when roster display name / Entra id updates for a stream. Does not change transcript identity (that is SSRC-bound before speech).</summary>
     public async Task BroadcastTranscriptIdentityUpdateAsync(uint sourceId, string? displayName, string? entraOid)
     {
-        var resolvedEntra = string.IsNullOrWhiteSpace(entraOid)
-            ? null
-            : _participantManager.GetEntraObjectIdForTranscriptPayload(entraOid);
-        var entraForClients = !string.IsNullOrWhiteSpace(resolvedEntra) &&
-                              ParticipantManager.IsSyntheticParticipantId(resolvedEntra)
-            ? null
-            : resolvedEntra;
-
         try
         {
             await _hubContext.Clients.All.SendAsync("transcript-update", new
@@ -77,7 +62,7 @@ public sealed class TranscriptBroadcaster
                 type = "transcript-update",
                 sourceId,
                 displayName,
-                azureAdObjectId = entraForClients,
+                azureAdObjectId = entraOid,
                 timestamp = DateTimeOffset.UtcNow
             });
         }

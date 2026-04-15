@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "f1OpW87ELTI=",
+  "dgSpecHash": "H+8MMotezzQ=",
   "success": true,
-  "projectFilePath": "C:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
+  "projectFilePath": "c:\\Users\\AmnaZahid\\OneDrive - Royal Cyber Inc\\Documents\\RCAWS NextGenModernizationAccelerator\\VM-hosted bot\\TeamsMediaBot.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\AmnaZahid\\.nuget\\packages\\azure.core\\1.52.0\\azure.core.1.52.0.nupkg.sha512",
     "C:\\Users\\AmnaZahid\\.nuget\\packages\\azure.identity\\1.20.0\\azure.identity.1.20.0.nupkg.sha512",
